@@ -20,26 +20,26 @@ export const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate }) => {
   ];
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-gray-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
+    <header className="sticky top-0 z-50 w-full border-b border-gray-700 bg-black/80 backdrop-blur supports-[backdrop-filter]:bg-black/60">
       <div className="max-w-7xl mx-auto px-4 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold text-sm">
+            <div className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold text-sm">
               HT-HGNN
             </div>
-            <p className="text-sm text-gray-600 hidden sm:inline">Supply Chain Risk Analysis</p>
+            <p className="text-sm text-gray-400 hidden sm:inline">Supply Chain Risk Analysis</p>
           </div>
 
           {/* Desktop Navigation */}
-          <nav className="hidden md:flex items-center gap-1 bg-gray-50 rounded-lg p-1">
+          <nav className="hidden md:flex items-center gap-1 bg-gray-900 rounded-lg p-1">
             {navItems.map((item) => (
               <button
                 key={item.id}
                 onClick={() => onNavigate(item.id)}
                 className={`flex items-center px-3 py-2 rounded transition-all duration-200 text-sm font-medium whitespace-nowrap ${
                   currentPage === item.id
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-gray-800 text-blue-400 shadow-sm'
+                    : 'text-gray-400 hover:text-gray-300'
                 }`}
               >
                 {item.icon}
@@ -51,7 +51,7 @@ export const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate }) => {
           {/* Mobile Menu Button */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="md:hidden p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400"
           >
             {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
           </button>
@@ -69,8 +69,8 @@ export const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate }) => {
                 }}
                 className={`w-full text-left px-3 py-2 rounded transition-colors text-sm font-medium ${
                   currentPage === item.id
-                    ? 'bg-blue-50 text-blue-600 font-semibold'
-                    : 'text-gray-700 hover:bg-gray-100'
+                    ? 'bg-gray-800 text-blue-400 font-semibold'
+                    : 'text-gray-400 hover:bg-gray-800'
                 }`}
               >
                 <span className="flex items-center">

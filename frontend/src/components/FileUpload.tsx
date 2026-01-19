@@ -72,7 +72,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUpload, isLoading = fa
       <div
         className={clsx(
           'relative border-2 border-dashed rounded-lg p-8 transition-colors',
-          isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50',
+          isDragging ? 'border-blue-400 bg-blue-950/30' : 'border-gray-600 bg-gray-900/30',
           isLoading && 'opacity-50 pointer-events-none'
         )}
         onDragOver={handleDragOver}
@@ -88,8 +88,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUpload, isLoading = fa
         />
         
         <div className="flex flex-col items-center justify-center pointer-events-none">
-          <Upload className="w-12 h-12 text-gray-400 mb-2" />
-          <p className="text-lg font-medium text-gray-700 mb-1">
+          <Upload className="w-12 h-12 text-gray-500 mb-2" />
+          <p className="text-lg font-medium text-gray-300 mb-1">
             Drag and drop your CSV file
           </p>
           <p className="text-sm text-gray-500">
@@ -99,44 +99,44 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUpload, isLoading = fa
       </div>
 
       {isLoading && (
-        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <p className="text-blue-700 text-sm">Processing file...</p>
+        <div className="mt-4 p-4 bg-blue-950/30 border border-blue-700/50 rounded-lg">
+          <p className="text-blue-400 text-sm">Processing file...</p>
         </div>
       )}
 
       {error && (
-        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start">
-          <AlertCircle className="w-5 h-5 text-red-600 mr-3 mt-0.5 flex-shrink-0" />
-          <p className="text-red-700 text-sm">{error}</p>
+        <div className="mt-4 p-4 bg-red-950/30 border border-red-700/50 rounded-lg flex items-start">
+          <AlertCircle className="w-5 h-5 text-red-400 mr-3 mt-0.5 flex-shrink-0" />
+          <p className="text-red-400 text-sm">{error}</p>
         </div>
       )}
 
       {success && (
-        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start">
-          <CheckCircle className="w-5 h-5 text-green-600 mr-3 mt-0.5 flex-shrink-0" />
-          <p className="text-green-700 text-sm">{success}</p>
+        <div className="mt-4 p-4 bg-green-950/30 border border-green-700/50 rounded-lg flex items-start">
+          <CheckCircle className="w-5 h-5 text-green-400 mr-3 mt-0.5 flex-shrink-0" />
+          <p className="text-green-400 text-sm">{success}</p>
         </div>
       )}
 
       {result && (
-        <div className="mt-4 p-4 bg-white border border-gray-200 rounded-lg">
-          <h3 className="font-semibold text-gray-900 mb-3">Prediction Results</h3>
+        <div className="mt-4 p-4 bg-gray-800/50 border border-gray-700 rounded-lg">
+          <h3 className="font-semibold text-white mb-3">Prediction Results</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-3 bg-blue-50 rounded">
-              <p className="text-sm text-gray-600">Price Predictions</p>
-              <p className="text-xl font-bold text-blue-600">
+            <div className="p-3 bg-blue-950/50 border border-blue-700/30 rounded">
+              <p className="text-sm text-gray-400">Price Predictions</p>
+              <p className="text-xl font-bold text-blue-400">
                 {result.pricePredictions.length}
               </p>
             </div>
-            <div className="p-3 bg-green-50 rounded">
-              <p className="text-sm text-gray-600">Change Forecasts</p>
-              <p className="text-xl font-bold text-green-600">
+            <div className="p-3 bg-green-950/50 border border-green-700/30 rounded">
+              <p className="text-sm text-gray-400">Change Forecasts</p>
+              <p className="text-xl font-bold text-green-400">
                 {result.changePredictions.length}
               </p>
             </div>
-            <div className="p-3 bg-purple-50 rounded">
-              <p className="text-sm text-gray-600">Criticality Scores</p>
-              <p className="text-xl font-bold text-purple-600">
+            <div className="p-3 bg-purple-950/50 border border-purple-700/30 rounded">
+              <p className="text-sm text-gray-400">Criticality Scores</p>
+              <p className="text-xl font-bold text-purple-400">
                 {result.criticalityScores.length}
               </p>
             </div>

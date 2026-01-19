@@ -4,6 +4,7 @@ import { RiskDashboard } from './components/RiskDashboard';
 import { ModelStats } from './components/ModelStats';
 import { Header } from './components/Header';
 import { VisualizationPage } from './pages/VisualizationPage';
+import { SparklesCore } from './ui/sparkles';
 import inferenceService from './services/inferenceService';
 import type { ModelInfo, AnalysisResult } from './types';
 
@@ -106,139 +107,148 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header currentPage={currentPage} onNavigate={setCurrentPage} />
+    <div className="min-h-screen bg-black">
+      {/* Main Sparkles Background */}
+      <div className="fixed inset-0 z-0">
+        <div className="absolute inset-0 h-screen w-screen">
+          <SparklesCore
+            id="tsparticlesfullpage"
+            background="transparent"
+            minSize={0.6}
+            maxSize={1.4}
+            particleDensity={100}
+            className="w-full h-full"
+            particleColor="#FFFFFF"
+          />
+        </div>
+      </div>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-700 text-sm">{error}</p>
-          </div>
-        )}
+      {/* Content overlay */}
+      <div className="relative z-10">
+        <Header currentPage={currentPage} onNavigate={setCurrentPage} />
 
-        {currentPage === 'home' && (
-          <div className="space-y-8">
-            <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg p-8">
-              <h1 className="text-3xl font-bold mb-2">Supply Chain Risk Analysis</h1>
-              <p className="text-blue-100">
-                Powered by HT-HGNN (Heterogeneous Temporal Hypergraph Neural Network)
-              </p>
+        <main className="min-h-screen">
+          {error && (
+            <div className="max-w-7xl mx-auto px-4 mt-8 mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-red-700 text-sm">{error}</p>
             </div>
+          )}
 
-            <div className="grid md:grid-cols-2 gap-8">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900 mb-4">Analyze Your Data</h2>
-                <FileUpload onUpload={handleFileUpload} isLoading={isLoading} />
-              </div>
+          {currentPage === 'home' && (
+            <div className="max-w-7xl mx-auto px-4 py-12">
+              <div className="grid md:grid-cols-2 gap-8">
+                <div className="bg-black/80 backdrop-blur-sm border border-gray-700 rounded-lg shadow-lg p-8">
+                  <h2 className="text-2xl font-bold text-white mb-4">Analyze Your Data</h2>
+                  <FileUpload onUpload={handleFileUpload} isLoading={isLoading} />
+                </div>
 
-              {modelInfo && (
-                <div className="space-y-4">
-                  <h2 className="text-xl font-bold text-gray-900 mb-4">Model Information</h2>
-                  <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-3">
-                    <div>
-                      <p className="text-sm text-gray-600">Name</p>
-                      <p className="font-semibold text-gray-900">{modelInfo.name}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">Parameters</p>
-                      <p className="font-semibold text-gray-900">
-                        {modelInfo.parameters.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">Device</p>
-                      <p className="font-semibold text-gray-900">{modelInfo.device}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">Training Date</p>
-                      <p className="font-semibold text-gray-900">
-                        {new Date(modelInfo.trainingDate).toLocaleDateString()}
-                      </p>
+                {modelInfo && (
+                  <div className="bg-black/80 backdrop-blur-sm border border-gray-700 rounded-lg shadow-lg p-8 space-y-4">
+                    <h2 className="text-2xl font-bold text-white mb-4">Model Information</h2>
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-sm text-gray-400">Name</p>
+                        <p className="font-semibold text-white">{modelInfo.name}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-400">Parameters</p>
+                        <p className="font-semibold text-white">
+                          {modelInfo.parameters.toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-400">Device</p>
+                        <p className="font-semibold text-white">{modelInfo.device}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-400">Training Date</p>
+                        <p className="font-semibold text-white">
+                          {new Date(modelInfo.trainingDate).toLocaleDateString()}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {currentPage === 'analysis' && analysisResult && (
-          <RiskDashboard
-            riskAssessments={analysisResult.riskAssessments}
-            topCriticalNodes={analysisResult.topCriticalNodes}
-            averageRisk={analysisResult.averageRisk}
-          />
-        )}
+          {currentPage === 'analysis' && analysisResult && (
+            <div className="max-w-7xl mx-auto px-4 py-8">
+              <div className="bg-black/80 backdrop-blur-sm border border-gray-700 rounded-lg p-8">
+                <RiskDashboard
+                  riskAssessments={analysisResult.riskAssessments}
+                  topCriticalNodes={analysisResult.topCriticalNodes}
+                  averageRisk={analysisResult.averageRisk}
+                />
+              </div>
+            </div>
+          )}
 
-        {currentPage === 'visualization' && analysisResult && (
-          <VisualizationPage riskAssessments={analysisResult.riskAssessments} />
-        )}
+          {currentPage === 'visualization' && analysisResult && (
+            <div className="max-w-7xl mx-auto px-4 py-8">
+              <div className="bg-black/80 backdrop-blur-sm border border-gray-700 rounded-lg p-8">
+                <VisualizationPage riskAssessments={analysisResult.riskAssessments} />
+              </div>
+            </div>
+          )}
 
-        {currentPage === 'model' && modelInfo && (
-          <ModelStats metrics={modelInfo.metrics} device={modelInfo.device} />
-        )}
+          {currentPage === 'model' && modelInfo && (
+            <div className="max-w-7xl mx-auto px-4 py-8">
+              <div className="bg-black/80 backdrop-blur-sm border border-gray-700 rounded-lg p-8">
+                <ModelStats metrics={modelInfo.metrics} device={modelInfo.device} />
+              </div>
+            </div>
+          )}
 
-        {currentPage === 'about' && (
-          <div className="max-w-3xl">
-            <div className="bg-white border border-gray-200 rounded-lg p-8">
-              <h1 className="text-2xl font-bold text-gray-900 mb-4">About HT-HGNN</h1>
+          {currentPage === 'about' && (
+            <div className="max-w-3xl mx-auto px-4 py-8">
+              <div className="bg-black/80 backdrop-blur-sm border border-gray-700 rounded-lg p-8">
+                <h1 className="text-2xl font-bold text-white mb-4">About HT-HGNN</h1>
 
-              <div className="space-y-6 text-gray-700">
-                <p>
-                  The Heterogeneous Temporal Hypergraph Neural Network (HT-HGNN) is an advanced
-                  machine learning model designed to analyze supply chain networks and assess risk
-                  factors.
-                </p>
-
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 mb-2">Key Features</h2>
-                  <ul className="list-disc list-inside space-y-2">
-                    <li>Multi-layer neural architecture (HGNN+ + HGT + TGN)</li>
-                    <li>Real supply chain data analysis</li>
-                    <li>Price prediction and change forecasting</li>
-                    <li>Criticality scoring for supply chain nodes</li>
-                    <li>GPU-optimized inference</li>
-                  </ul>
-                </div>
-
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 mb-2">Architecture</h2>
+                <div className="space-y-6 text-gray-300">
                   <p>
-                    The model combines three neural paradigms:
+                    The Heterogeneous Temporal Hypergraph Neural Network (HT-HGNN) is an advanced
+                    machine learning model designed to analyze supply chain networks and assess risk
+                    factors.
                   </p>
-                  <ul className="list-disc list-inside space-y-2 mt-2">
-                    <li>
-                      <strong>HGNN+ (Hypergraph NN):</strong> Models multi-way relationships
-                      between supply chain entities
-                    </li>
-                    <li>
-                      <strong>HGT (Heterogeneous Graph Transformer):</strong> Handles different
-                      node and edge types with attention mechanisms
-                    </li>
-                    <li>
-                      <strong>TGN (Temporal Graph Network):</strong> Captures temporal dynamics
-                      and cascade propagation
-                    </li>
-                  </ul>
-                </div>
 
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 mb-2">Use Cases</h2>
-                  <ul className="list-disc list-inside space-y-2">
-                    <li>Identify critical suppliers and vulnerabilities</li>
-                    <li>Predict price changes and market impacts</li>
-                    <li>Assess cascade risks in supply networks</li>
-                    <li>Support strategic sourcing decisions</li>
-                  </ul>
+                  <div>
+                    <h2 className="text-lg font-semibold text-white mb-2">Key Features</h2>
+                    <ul className="list-disc list-inside space-y-2">
+                      <li>Multi-layer neural architecture</li>
+                      <li>Real supply chain data analysis</li>
+                      <li>Price prediction and change forecasting</li>
+                      <li>Criticality scoring for supply chain nodes</li>
+                      <li>GPU-optimized inference</li>
+                    </ul>
+                  </div>
+
+                  <div>
+                    <h2 className="text-lg font-semibold text-white mb-2">Architecture</h2>
+                    <p>
+                      The model combines advanced neural paradigms for comprehensive supply chain analysis with temporal and heterogeneous relationship modeling.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h2 className="text-lg font-semibold text-white mb-2">Use Cases</h2>
+                    <ul className="list-disc list-inside space-y-2">
+                      <li>Identify critical suppliers and vulnerabilities</li>
+                      <li>Predict price changes and market impacts</li>
+                      <li>Assess cascade risks in supply networks</li>
+                      <li>Support strategic sourcing decisions</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
-      </main>
+          )}
+        </main>
+      </div>
 
       {/* Footer */}
-      <footer className="bg-gray-900 text-gray-300 py-6 mt-12">
+      <footer className="relative z-10 bg-black/80 backdrop-blur-sm border-t border-gray-700 text-gray-400 py-6 mt-12">
         <div className="max-w-7xl mx-auto px-4 text-center text-sm">
           <p>HT-HGNN Supply Chain Risk Analysis Platform © 2026</p>
           <p className="mt-1">Powered by PyTorch and React</p>
