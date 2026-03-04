@@ -85,6 +85,7 @@ checkpoints/
 *.temp
 temp/
 *.log
+tmpclaude-*
 
 # GPU monitoring
 monitor_gpu.log

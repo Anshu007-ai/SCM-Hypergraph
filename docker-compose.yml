@@ -1,0 +1,112 @@
+# =============================================================================
+# docker-compose.yml
+# HT-HGNN v2.0 Supply Chain Risk Analysis - Full Stack
+# =============================================================================
+#
+# Usage:
+#   docker compose up --build        (first run / after code changes)
+#   docker compose up -d             (detached)
+#   docker compose down              (stop all)
+#   docker compose logs -f backend   (tail backend logs)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Frontend - React / Vite served by nginx (port 5173 -> container 80)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: schg-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    networks:
+      - supply-chain-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Backend - FastAPI (port 8000)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: schg-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./Data set:/app/Data set:ro
+      - ./outputs:/app/outputs
+    networks:
+      - supply-chain-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redis - caching & Celery message broker
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: schg-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - supply-chain-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker - async simulation / training tasks
+  # ---------------------------------------------------------------------------
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: schg-celery-worker
+    command: >
+      celery -A src.tasks.celery_app worker
+      --loglevel=info
+      --concurrency=2
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./Data set:/app/Data set:ro
+      - ./outputs:/app/outputs
+    networks:
+      - supply-chain-net
+    restart: unless-stopped
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  redis-data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  supply-chain-net:
+    driver: bridge

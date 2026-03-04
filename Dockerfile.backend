@@ -1,0 +1,36 @@
+# =============================================================================
+# Dockerfile.backend
+# HT-HGNN v2.0 Supply Chain Risk Analysis - Backend (FastAPI + Celery)
+# =============================================================================
+FROM python:3.11-slim
+
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install system dependencies required by torch / scientific stack
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ libffi-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# ---- Install Python dependencies first (layer cache) ----
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ---- Copy application source code ----
+COPY src/ ./src/
+COPY frontend/backend_server.py ./frontend/backend_server.py
+COPY train_ht_hgnn.py .
+
+# Copy pre-trained model artefacts (checkpoints, datasets, reports)
+COPY outputs/ ./outputs/
+
+# Expose the FastAPI port
+EXPOSE 8000
+
+# Default command - start uvicorn
+CMD ["uvicorn", "frontend.backend_server:app", "--host", "0.0.0.0", "--port", "8000"]

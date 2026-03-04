@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Navigation, Info, Zap, Menu, X } from 'lucide-react';
+import { Navigation, Info, Zap, Menu, X, Brain, Activity } from 'lucide-react';
 
-type PageType = 'home' | 'analysis' | 'model' | 'about' | 'visualization';
+type PageType = 'home' | 'analysis' | 'model' | 'about' | 'visualization' | 'simulation' | 'explain';
 
 interface HeaderProps {
   currentPage: PageType;
@@ -15,6 +15,8 @@ export const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate }) => {
     { id: 'home', label: 'Dashboard', icon: <Navigation className="w-4 h-4" /> },
     { id: 'analysis', label: 'Analysis', icon: <Navigation className="w-4 h-4" /> },
     { id: 'visualization', label: 'Visualization', icon: <Zap className="w-4 h-4" /> },
+    { id: 'simulation', label: 'Simulation', icon: <Activity className="w-4 h-4" /> },
+    { id: 'explain', label: 'Explain', icon: <Brain className="w-4 h-4" /> },
     { id: 'model', label: 'Model', icon: <Info className="w-4 h-4" /> },
     { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
   ];
