@@ -86,29 +86,6 @@ const NAV_ITEMS = [
   { id: 'team', label: 'Team' },
 ];
 
-const PROBLEM_CARDS = [
-  {
-    icon: AlertTriangle,
-    stat: '73%',
-    text: 'of supply chain failures affect 3+ companies simultaneously',
-    color: 'from-red-500/20 to-orange-500/20',
-    border: 'border-red-500/20',
-  },
-  {
-    icon: Clock,
-    stat: 'Reactive',
-    text: 'Traditional tools react after disruption. We predict before.',
-    color: 'from-amber-500/20 to-yellow-500/20',
-    border: 'border-amber-500/20',
-  },
-  {
-    icon: Network,
-    stat: 'Pairwise',
-    text: 'Standard graphs miss group dependencies. Hypergraphs capture them.',
-    color: 'from-blue-500/20 to-cyan-500/20',
-    border: 'border-blue-500/20',
-  },
-];
 
 const ARCH_STEPS = [
   {
@@ -1130,30 +1107,410 @@ const HeroSection: React.FC = () => {
 };
 
 /* -----------------------------------------------------------------------
-   5. PROBLEM SECTION
+   5. PROBLEM SECTION — Interactive & Visual
    ----------------------------------------------------------------------- */
 
-const ProblemSection: React.FC = () => (
-  <Section id="problem" className="bg-grid">
-    <SectionHeading sub="Why existing tools fall short for modern supply chains">
-      The Problem
-    </SectionHeading>
+const CASCADE_SCENARIO = [
+  { id: 0, label: 'Normal Operations', desc: 'All supply chain nodes operating normally. No disruptions detected.', affected: [] as string[], color: '#22C55E' },
+  { id: 1, label: 'Supplier Failure', desc: 'A critical Tier-1 supplier shuts down due to equipment failure. Traditional tools detect this event only.', affected: ['supplier'], color: '#EF4444' },
+  { id: 2, label: 'Hidden Group Impact', desc: '3 manufacturers sharing this supplier lose raw materials simultaneously — a GROUP dependency invisible to pairwise graphs.', affected: ['supplier', 'mfg1', 'mfg2', 'mfg3'], color: '#F97316' },
+  { id: 3, label: 'Logistics Bottleneck', desc: 'Rerouted shipments overload 2 logistics hubs. Standard models predict sequential delays; reality is simultaneous congestion.', affected: ['supplier', 'mfg1', 'mfg2', 'mfg3', 'hub1', 'hub2'], color: '#EAB308' },
+  { id: 4, label: 'Customer Impact', desc: '12 retailers and 50K+ end customers affected within days. By the time reactive tools flag the issue, the damage is done.', affected: ['supplier', 'mfg1', 'mfg2', 'mfg3', 'hub1', 'hub2', 'ret1', 'ret2', 'ret3'], color: '#DC2626' },
+];
 
-    <div className="grid md:grid-cols-3 gap-6">
-      {PROBLEM_CARDS.map((card, i) => (
-        <FadeIn key={i} delay={i * 0.15}>
-          <GlassCard className={`h-full ${card.border} border`}>
-            <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${card.color} flex items-center justify-center mb-5`}>
-              <card.icon className="w-6 h-6 text-white" />
+const SCENARIO_NODES = [
+  { id: 'supplier', label: 'Tier-1 Supplier', x: 50, y: 20, tier: 'supplier' },
+  { id: 'mfg1', label: 'Manufacturer A', x: 20, y: 40, tier: 'manufacturer' },
+  { id: 'mfg2', label: 'Manufacturer B', x: 50, y: 40, tier: 'manufacturer' },
+  { id: 'mfg3', label: 'Manufacturer C', x: 80, y: 40, tier: 'manufacturer' },
+  { id: 'hub1', label: 'Logistics Hub 1', x: 30, y: 62, tier: 'logistics' },
+  { id: 'hub2', label: 'Logistics Hub 2', x: 70, y: 62, tier: 'logistics' },
+  { id: 'ret1', label: 'Retailer X', x: 15, y: 82, tier: 'retail' },
+  { id: 'ret2', label: 'Retailer Y', x: 50, y: 82, tier: 'retail' },
+  { id: 'ret3', label: 'Retailer Z', x: 85, y: 82, tier: 'retail' },
+];
+
+const SCENARIO_EDGES: [string, string][] = [
+  ['supplier', 'mfg1'], ['supplier', 'mfg2'], ['supplier', 'mfg3'],
+  ['mfg1', 'hub1'], ['mfg2', 'hub1'], ['mfg2', 'hub2'], ['mfg3', 'hub2'],
+  ['hub1', 'ret1'], ['hub1', 'ret2'], ['hub2', 'ret2'], ['hub2', 'ret3'],
+];
+
+const TIER_COLORS: Record<string, string> = {
+  supplier: '#8B5CF6',
+  manufacturer: '#3B82F6',
+  logistics: '#06B6D4',
+  retail: '#10B981',
+};
+
+const COMPARISON_POINTS = [
+  {
+    aspect: 'Relationship Modeling',
+    gcn: 'Pairwise edges — can only connect 2 nodes at a time',
+    hthgnn: 'Hyperedges — one edge connects any number of nodes (group dependencies)',
+    icon: Network,
+  },
+  {
+    aspect: 'Disruption Detection',
+    gcn: 'Reactive: flags issues after they propagate hop-by-hop',
+    hthgnn: 'Predictive: models simultaneous group failure before it happens',
+    icon: AlertTriangle,
+  },
+  {
+    aspect: 'Temporal Patterns',
+    gcn: 'Static snapshot — no memory of past events',
+    hthgnn: 'Bi-LSTM + Transformer learns time-dependent delays and seasonality',
+    icon: Clock,
+  },
+  {
+    aspect: 'Cascade Accuracy',
+    gcn: 'Average ±7.5 days timing error on cascade predictions',
+    hthgnn: 'Average ±2.1 days — 3.6× more accurate',
+    icon: Target,
+  },
+];
+
+const ProblemSection: React.FC = () => {
+  const [scenarioStep, setScenarioStep] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [activeComparison, setActiveComparison] = useState<number | null>(null);
+
+  const currentScenario = CASCADE_SCENARIO[scenarioStep];
+
+  useEffect(() => {
+    if (isPlaying) {
+      timerRef.current = setInterval(() => {
+        setScenarioStep(prev => {
+          if (prev >= CASCADE_SCENARIO.length - 1) { setIsPlaying(false); return prev; }
+          return prev + 1;
+        });
+      }, 2500);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isPlaying]);
+
+  return (
+    <Section id="problem" className="bg-grid">
+      <SectionHeading sub="Why existing tools fail to predict supply chain disruptions">
+        The Problem
+      </SectionHeading>
+
+      {/* ── Core Problem Statement ── */}
+      <FadeIn>
+        <div className="max-w-3xl mx-auto text-center mb-12">
+          <p className="text-gray-300 text-lg leading-relaxed">
+            Modern supply chains are <strong className="text-white">multi-party networks</strong> where a single failure can
+            simultaneously affect dozens of interconnected companies. Yet the tools used to monitor them still model
+            relationships as <strong className="text-red-400">simple A→B pairs</strong>, missing the group dynamics that cause
+            cascading disruptions worth <strong className="text-amber-400">$189 billion (₹15.8 lakh crore) annually</strong>.
+          </p>
+        </div>
+      </FadeIn>
+
+      {/* ── Three Key Pain Points ── */}
+      <div className="grid md:grid-cols-3 gap-6 mb-16">
+        {[
+          {
+            icon: AlertTriangle,
+            stat: '73%',
+            title: 'Multi-Party Failures',
+            text: 'of supply chain disruptions affect 3 or more companies simultaneously — standard pairwise graphs cannot represent this.',
+            color: 'from-red-500/20 to-orange-500/20',
+            border: 'border-red-500/20',
+            example: 'E.g., When P&W recalled GTF engines, IndiGo, 3 MRO facilities, and 8 airports were hit as a group — not one-by-one.'
+          },
+          {
+            icon: Clock,
+            stat: '$189B / ₹15.8L Cr',
+            title: 'Reactive, Not Predictive',
+            text: '($189 billion / ₹15.8 lakh crore) lost annually to supply chain disruptions. Traditional tools detect problems AFTER they cascade — when it\'s too late to act.',
+            color: 'from-amber-500/20 to-yellow-500/20',
+            border: 'border-amber-500/20',
+            example: 'E.g., The Suez Canal blockage took 3 days to detect downstream impact on European manufacturers.'
+          },
+          {
+            icon: Network,
+            stat: '3.6×',
+            title: 'Timing Blindness',
+            text: 'worse cascade predictions from standard GCN models. They miss temporal lag patterns like MRO processing delays or seasonal demand surges.',
+            color: 'from-blue-500/20 to-cyan-500/20',
+            border: 'border-blue-500/20',
+            example: 'E.g., GCN predicted hub congestion 5 days apart; reality was simultaneous — because hubs share centralized scheduling.'
+          },
+        ].map((card, i) => (
+          <FadeIn key={i} delay={i * 0.15}>
+            <GlassCard className={`h-full ${card.border} border group cursor-default`}>
+              <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${card.color} flex items-center justify-center mb-4`}>
+                <card.icon className="w-6 h-6 text-white" />
+              </div>
+              <div className="text-3xl font-bold text-white mb-1">{card.stat}</div>
+              <h4 className="text-white font-semibold text-sm mb-2">{card.title}</h4>
+              <p className="text-gray-400 text-sm leading-relaxed mb-3">{card.text}</p>
+              <p className="text-gray-500 text-xs leading-relaxed italic border-t border-white/5 pt-3">
+                {card.example}
+              </p>
+            </GlassCard>
+          </FadeIn>
+        ))}
+      </div>
+
+      {/* ── Interactive Cascade Scenario ── */}
+      <FadeIn delay={0.1}>
+        <GlassCard hover={false} className="border border-red-500/10 mb-12">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+              <Zap className="w-5 h-5 text-red-400" />
             </div>
-            <div className="text-3xl font-bold text-white mb-2">{card.stat}</div>
-            <p className="text-gray-400 leading-relaxed">{card.text}</p>
-          </GlassCard>
-        </FadeIn>
-      ))}
-    </div>
-  </Section>
-);
+            <div>
+              <h3 className="text-white font-bold text-base">See How a Single Failure Cascades</h3>
+              <p className="text-gray-500 text-xs">Click through or press Play to watch a disruption propagate through a supply chain</p>
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-5 gap-6">
+            {/* Left: Visual Network */}
+            <div className="lg:col-span-3">
+              <div className="relative bg-black/20 rounded-xl border border-white/5 overflow-hidden" style={{ paddingBottom: '60%' }}>
+                <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
+                  {/* Edges */}
+                  {SCENARIO_EDGES.map(([from, to], idx) => {
+                    const f = SCENARIO_NODES.find(n => n.id === from)!;
+                    const t = SCENARIO_NODES.find(n => n.id === to)!;
+                    const fromAffected = currentScenario.affected.includes(from);
+                    const toAffected = currentScenario.affected.includes(to);
+                    const bothAffected = fromAffected && toAffected;
+                    return (
+                      <line
+                        key={idx}
+                        x1={f.x} y1={f.y} x2={t.x} y2={t.y}
+                        stroke={bothAffected ? currentScenario.color : '#1E293B'}
+                        strokeWidth={bothAffected ? 0.8 : 0.4}
+                        strokeOpacity={bothAffected ? 0.8 : 0.3}
+                        className="transition-all duration-700"
+                      />
+                    );
+                  })}
+
+                  {/* Hyperedge cloud for affected group */}
+                  {scenarioStep >= 2 && (() => {
+                    const affectedNodes = SCENARIO_NODES.filter(n => currentScenario.affected.includes(n.id));
+                    if (affectedNodes.length < 2) return null;
+                    const cx = affectedNodes.reduce((sum, n) => sum + n.x, 0) / affectedNodes.length;
+                    const cy = affectedNodes.reduce((sum, n) => sum + n.y, 0) / affectedNodes.length;
+                    const rx = Math.max(20, ...affectedNodes.map(n => Math.abs(n.x - cx))) + 10;
+                    const ry = Math.max(15, ...affectedNodes.map(n => Math.abs(n.y - cy))) + 8;
+                    return (
+                      <ellipse
+                        cx={cx} cy={cy} rx={rx} ry={ry}
+                        fill={`${currentScenario.color}15`}
+                        stroke={currentScenario.color}
+                        strokeWidth="0.3"
+                        strokeDasharray="2 1.5"
+                        className="transition-all duration-700"
+                        opacity={0.6}
+                      />
+                    );
+                  })()}
+
+                  {/* Nodes */}
+                  {SCENARIO_NODES.map(node => {
+                    const isAffected = currentScenario.affected.includes(node.id);
+                    const fillColor = isAffected ? currentScenario.color : TIER_COLORS[node.tier];
+                    return (
+                      <g key={node.id} className="transition-all duration-500">
+                        {isAffected && (
+                          <circle cx={node.x} cy={node.y} r="4.5" fill="none" stroke={currentScenario.color} strokeWidth="0.3" opacity="0.4">
+                            <animate attributeName="r" from="3" to="6" dur="1.5s" repeatCount="indefinite" />
+                            <animate attributeName="opacity" from="0.5" to="0" dur="1.5s" repeatCount="indefinite" />
+                          </circle>
+                        )}
+                        <circle cx={node.x} cy={node.y} r="3" fill={fillColor} opacity={isAffected ? 1 : 0.5} className="transition-all duration-500" />
+                        <text x={node.x} y={node.y + 6} textAnchor="middle" fill={isAffected ? '#fff' : '#64748B'} fontSize="2.5" fontWeight={isAffected ? 'bold' : 'normal'} className="transition-all duration-500">
+                          {node.label}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                {/* Legend */}
+                <div className="absolute bottom-2 left-2 flex flex-wrap gap-2">
+                  {[
+                    { label: 'Supplier', color: TIER_COLORS.supplier },
+                    { label: 'Manufacturer', color: TIER_COLORS.manufacturer },
+                    { label: 'Logistics', color: TIER_COLORS.logistics },
+                    { label: 'Retail', color: TIER_COLORS.retail },
+                  ].map(l => (
+                    <span key={l.label} className="flex items-center gap-1 text-[9px] text-gray-500">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: l.color }} />
+                      {l.label}
+                    </span>
+                  ))}
+                </div>
+
+                {/* Hyperedge indicator */}
+                {scenarioStep >= 2 && (
+                  <div className="absolute top-2 right-2 text-[9px] px-2 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/20">
+                    Hyperedge: Group affected simultaneously
+                  </div>
+                )}
+              </div>
+
+              {/* Step Controls */}
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => { setIsPlaying(!isPlaying); }}
+                  className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 transition"
+                >
+                  {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  onClick={() => { setScenarioStep(0); setIsPlaying(false); }}
+                  className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex-1 flex gap-1.5">
+                  {CASCADE_SCENARIO.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => { setScenarioStep(i); setIsPlaying(false); }}
+                      className={`flex-1 h-2 rounded-full transition-all duration-300 ${i <= scenarioStep ? 'opacity-100' : 'opacity-30'}`}
+                      style={{ backgroundColor: i <= scenarioStep ? s.color : '#334155' }}
+                    />
+                  ))}
+                </div>
+                <span className="text-xs text-gray-500 font-mono ml-2">{scenarioStep + 1}/{CASCADE_SCENARIO.length}</span>
+              </div>
+            </div>
+
+            {/* Right: Description */}
+            <div className="lg:col-span-2 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-3 h-3 rounded-full" style={{ backgroundColor: currentScenario.color }} />
+                  <h4 className="text-white font-bold text-sm">Stage {scenarioStep}: {currentScenario.label}</h4>
+                </div>
+                <p className="text-gray-300 text-sm leading-relaxed mb-4">{currentScenario.desc}</p>
+
+                {scenarioStep > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-gray-500 text-[10px] uppercase tracking-wider font-semibold">Affected Nodes</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {currentScenario.affected.map(id => {
+                        const node = SCENARIO_NODES.find(n => n.id === id)!;
+                        return (
+                          <span key={id} className="text-[10px] px-2 py-0.5 rounded-full border" style={{ borderColor: `${TIER_COLORS[node.tier]}40`, color: TIER_COLORS[node.tier], backgroundColor: `${TIER_COLORS[node.tier]}10` }}>
+                            {node.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-6 space-y-3">
+                <div className="bg-red-500/[0.04] border border-red-500/10 rounded-lg p-3">
+                  <p className="text-red-400 text-[10px] font-semibold uppercase tracking-wider mb-1">Standard GCN Sees</p>
+                  <p className="text-gray-400 text-xs">
+                    {scenarioStep === 0 ? 'All clear — no disruption detected.' :
+                     scenarioStep === 1 ? 'Single node failure at Supplier. Predicts sequential hop-by-hop spread.' :
+                     scenarioStep === 2 ? 'Only Supplier → Mfg A (1 hop). Misses that B and C are affected simultaneously.' :
+                     scenarioStep === 3 ? 'Still propagating from Mfg nodes, ±5 days behind actual hub congestion timing.' :
+                     'Detects retail impact 7–10 days after it actually occurs. Too late to reroute.'}
+                  </p>
+                </div>
+                <div className="bg-emerald-500/[0.04] border border-emerald-500/10 rounded-lg p-3">
+                  <p className="text-emerald-400 text-[10px] font-semibold uppercase tracking-wider mb-1">HT-HGNN Sees</p>
+                  <p className="text-gray-400 text-xs">
+                    {scenarioStep === 0 ? 'Monitoring all hyperedge group dependencies in real-time.' :
+                     scenarioStep === 1 ? 'Hyperedge activates — predicts all 3 manufacturers affected as a group (within hours).' :
+                     scenarioStep === 2 ? 'Group dependency captured: all 3 manufacturers share the same hyperedge. Simultaneous impact predicted.' :
+                     scenarioStep === 3 ? 'Hub congestion predicted at ±0.3 days accuracy via shared scheduling hyperedge.' :
+                     'Full cascade predicted 7+ days in advance. Actionable rerouting recommendations generated.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </GlassCard>
+      </FadeIn>
+
+      {/* ── Why Standard Graphs Fail — Interactive Comparison ── */}
+      <FadeIn delay={0.2}>
+        <div className="mb-6">
+          <h3 className="text-white font-bold text-lg text-center mb-2">Why Standard Graph Networks Fail</h3>
+          <p className="text-gray-500 text-sm text-center">Click each row to see the detailed comparison</p>
+        </div>
+
+        <div className="grid gap-3 max-w-4xl mx-auto">
+          {COMPARISON_POINTS.map((point, i) => (
+            <div
+              key={i}
+              onClick={() => setActiveComparison(activeComparison === i ? null : i)}
+              className={`bg-white/[0.02] border rounded-xl transition-all duration-300 cursor-pointer ${
+                activeComparison === i ? 'border-accent-blue/30 bg-white/[0.04]' : 'border-white/5 hover:border-white/10'
+              }`}
+            >
+              <div className="flex items-center gap-3 p-4">
+                <div className="w-9 h-9 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
+                  <point.icon className="w-4 h-4 text-accent-cyan" />
+                </div>
+                <h4 className="text-white font-semibold text-sm flex-1">{point.aspect}</h4>
+                <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-300 ${activeComparison === i ? 'rotate-180' : ''}`} />
+              </div>
+
+              <AnimatePresence>
+                {activeComparison === i && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="grid md:grid-cols-2 gap-3 px-4 pb-4">
+                      <div className="bg-red-500/[0.04] border border-red-500/10 rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <X className="w-3.5 h-3.5 text-red-400" />
+                          <p className="text-red-400 text-[10px] font-bold uppercase tracking-wider">Standard GCN</p>
+                        </div>
+                        <p className="text-gray-400 text-xs leading-relaxed">{point.gcn}</p>
+                      </div>
+                      <div className="bg-emerald-500/[0.04] border border-emerald-500/10 rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider">HT-HGNN (Ours)</p>
+                        </div>
+                        <p className="text-gray-400 text-xs leading-relaxed">{point.hthgnn}</p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ))}
+        </div>
+      </FadeIn>
+
+      {/* ── Bottom CTA ── */}
+      <FadeIn delay={0.3}>
+        <div className="mt-12 text-center">
+          <p className="text-gray-400 text-sm mb-4">
+            <strong className="text-white">The core insight:</strong> Supply chain disruptions are <strong className="text-accent-cyan">group phenomena</strong>,
+            not chain reactions. You need a model that thinks in groups.
+          </p>
+          <div className="flex items-center justify-center gap-2 text-accent-blue text-sm font-semibold">
+            <ArrowRight className="w-4 h-4" />
+            <span>See our solution below</span>
+          </div>
+        </div>
+      </FadeIn>
+    </Section>
+  );
+};
 
 /* -----------------------------------------------------------------------
    6. SOLUTION SECTION
