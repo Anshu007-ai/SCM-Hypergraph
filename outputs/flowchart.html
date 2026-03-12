@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>HT-HGNN v2.0 Pipeline Flowchart</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0F172A; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+  h1 { color: #fff; margin-bottom: 8px; font-size: 1.6rem; }
+  p.sub { color: #94A3B8; margin-bottom: 20px; font-size: 0.9rem; }
+  .btn-row { display: flex; gap: 12px; margin-bottom: 20px; }
+  button {
+    background: #3B82F6; color: #fff; border: none; padding: 10px 24px;
+    border-radius: 8px; font-size: 0.95rem; cursor: pointer; font-weight: 600;
+  }
+  button:hover { background: #2563EB; }
+  button.secondary { background: #065F46; }
+  button.secondary:hover { background: #047857; }
+  #diagram-container {
+    background: #fff; border-radius: 12px; padding: 48px;
+    max-width: 100%; overflow: auto;
+  }
+</style>
+</head>
+<body>
+
+<h1>HT-HGNN v2.0 — Complete Pipeline Flowchart</h1>
+<p class="sub">From Data Input to Predictions & Explainability</p>
+
+<div class="btn-row">
+  <button onclick="downloadPNG()">⬇ Download PNG</button>
+  <button class="secondary" onclick="downloadSVG()">⬇ Download SVG</button>
+</div>
+
+<div id="diagram-container">
+<pre class="mermaid">
+flowchart TD
+    classDef input fill:#1E40AF,stroke:#3B82F6,color:#fff,stroke-width:2px,rx:12,ry:12
+    classDef process fill:#0F172A,stroke:#06B6D4,color:#fff,stroke-width:1px,rx:8,ry:8
+    classDef math fill:#164E63,stroke:#22D3EE,color:#fff,stroke-width:1px,rx:8,ry:8
+    classDef model fill:#7C3AED,stroke:#A78BFA,color:#fff,stroke-width:2px,rx:8,ry:8
+    classDef output fill:#065F46,stroke:#34D399,color:#fff,stroke-width:2px,rx:8,ry:8
+    classDef explainStyle fill:#92400E,stroke:#F59E0B,color:#fff,stroke-width:2px,rx:8,ry:8
+    classDef bridge fill:none,stroke:none,color:#334155
+
+    A["📂 USER UPLOADS CSV FILE"]:::input
+    A -->|"raw CSV"| P2_START
+
+    subgraph P2[" "]
+        direction TB
+        P2_TITLE["⬛ PHASE 1 — DATA CLEANING"]:::bridge
+        P2_START["Parse CSV with pandas"]:::process
+        P2_START --> P2B["Extract node names from text columns"]:::process
+        P2B --> P2C["Convert all columns to numeric"]:::process
+        P2C --> P2D["Drop empty rows and columns"]:::process
+        P2D --> P2E["Fill missing values with zero"]:::process
+    end
+
+    P2E -->|"clean numeric matrix"| P3_START
+
+    subgraph P3[" "]
+        direction TB
+        P3_TITLE["⬛ PHASE 2 — NORMALIZATION"]:::bridge
+        P3_START["Min-Max scale to 0-1 range"]:::math
+        P3_START --> P3B["Z-Score: center around zero"]:::math
+    end
+
+    P3B -->|"normalized features"| P4_START
+
+    subgraph P4[" "]
+        direction TB
+        P4_TITLE["⬛ PHASE 3 — HYPERGRAPH CONSTRUCTION"]:::bridge
+        P4_START["Create Nodes — each entity is a node"]:::process
+        P4_START --> P4B["Create Hyperedges — group related nodes"]:::process
+        P4B --> P4C["Build Incidence Matrix H of size N x M"]:::math
+        P4C --> P4D["Mine dynamic hyperedges from timestamps"]:::process
+    end
+
+    P4D -->|"hypergraph structure"| P5_START
+
+    subgraph P5[" "]
+        direction TB
+        P5_TITLE["⬛ PHASE 4 — RISK LABEL GENERATION"]:::bridge
+        P5_START["Joint Failure Prob = 1 minus product of reliabilities"]:::math
+        P5_START --> P5B["Engineering Impact = cube root of BOM x tolerance x path"]:::math
+        P5B --> P5C["Propagation Risk = downstream edges / total edges"]:::math
+        P5C --> P5D["HCI = 0.5 x Failure + 0.3 x Impact + 0.2 x Propagation"]:::math
+    end
+
+    P5D -->|"risk labels + tensors"| P6_START
+
+    subgraph P6[" "]
+        direction TB
+        P6_TITLE["⬛ PHASE 5 — NEURAL NETWORK"]:::bridge
+        P6_START["Convert to PyTorch GPU tensors"]:::process
+
+        P6_START --> L1A
+        subgraph L1["Layer 1 — Hypergraph Convolution"]
+            L1A["Nodes aggregate into hyperedges via H x features"]:::model
+            L1A --> L1B["Softmax attention weights each group"]:::model
+            L1B --> L1C["Propagate back to nodes via H-transpose"]:::model
+        end
+
+        L1C --> L2A
+        subgraph L2["Layer 2 — Heterogeneous Graph Transformer"]
+            L2A["Project each node type with separate weights"]:::model
+            L2A --> L2B["Multi-head attention per relation type x5"]:::model
+            L2B --> L2C["Fuse all 5 relation outputs into one"]:::model
+        end
+
+        L2C --> L3A
+        subgraph L3["Layer 3 — Temporal Encoder"]
+            L3A["Bi-LSTM captures short-term time patterns"]:::model
+            L3A --> L3B["Transformer captures long-range dependencies"]:::model
+            L3B --> L3C["Learned gate blends LSTM and Transformer"]:::model
+        end
+
+        L3C --> L4A
+        subgraph L4["Layer 4 — Cascade Risk Head"]
+            L4A["MLP estimates initial disruption probability"]:::model
+            L4A --> L4B["12-step propagation through hyperedges"]:::model
+            L4B --> L4C["Damping factor 0.9 prevents runaway risk"]:::model
+        end
+    end
+
+    L4C -->|"final embeddings"| HEADS
+
+    subgraph P7[" "]
+        direction TB
+        P7_TITLE["⬛ PHASE 6 — PREDICTION HEADS"]:::bridge
+        HEADS["4 parallel MLP output heads"]:::process
+        HEADS --> H1["Price Prediction — MSE loss x 1.0"]:::output
+        HEADS --> H2["Change Forecast — MSE loss x 0.8"]:::output
+        HEADS --> H3["Criticality Score — BCE loss x 1.2"]:::output
+        HEADS --> H4["Cascade Risk — MSE loss x 0.6"]:::output
+    end
+
+    H1 --> LOSS
+    H2 --> LOSS
+    H3 --> LOSS
+    H4 --> LOSS
+
+    subgraph P8[" "]
+        direction TB
+        P8_TITLE["⬛ PHASE 7 — TRAINING"]:::bridge
+        LOSS["Weighted total loss = sum of all 4 heads"]:::math
+        LOSS --> BACK["Backpropagation computes gradients"]:::math
+        BACK --> OPT["Adam optimizer updates weights x 100 epochs"]:::math
+    end
+
+    OPT -->|"trained model"| OUTPUT
+
+    subgraph P9[" "]
+        direction TB
+        P9_TITLE["⬛ PHASE 8 — OUTPUT"]:::bridge
+        OUTPUT["🎯 Per-node predictions"]:::output
+        OUTPUT --> SHAP["🔍 HyperSHAP explanations"]:::explainStyle
+        OUTPUT --> SIM["🌊 Cascade what-if simulation"]:::explainStyle
+        SHAP --> DASH["📊 Dashboard with risk scores and recommendations"]:::output
+        SIM --> DASH
+    end
+</pre>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'default',
+  flowchart: {
+    curve: 'monotoneY',
+    nodeSpacing: 60,
+    rankSpacing: 50,
+    subGraphTitleMargin: { top: 10, bottom: 10 },
+    padding: 24,
+    defaultRenderer: 'dagre',
+    htmlLabels: true,
+    wrappingWidth: 280
+  },
+  themeVariables: {
+    fontSize: '14px',
+    fontFamily: 'Segoe UI, sans-serif',
+    lineColor: '#64748B',
+    primaryColor: '#E2E8F0',
+    primaryBorderColor: '#94A3B8',
+    primaryTextColor: '#0F172A'
+  }
+});
+
+function downloadSVG() {
+  const svg = document.querySelector('#diagram-container svg');
+  if (!svg) { alert('Diagram not rendered yet — wait a moment and retry.'); return; }
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  // Embed fonts
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  style.textContent = '@import url("https://fonts.googleapis.com/css2?family=Segoe+UI&display=swap");';
+  clone.insertBefore(style, clone.firstChild);
+  const blob = new Blob([clone.outerHTML], { type: 'image/svg+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'HT-HGNN_v2_Pipeline_Flowchart.svg';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function downloadPNG() {
+  const svg = document.querySelector('#diagram-container svg');
+  if (!svg) { alert('Diagram not rendered yet — wait a moment and retry.'); return; }
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const canvas = document.createElement('canvas');
+  const scale = 3;
+  const svgRect = svg.getBoundingClientRect();
+  canvas.width = svgRect.width * scale;
+  canvas.height = svgRect.height * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const img = new Image();
+  img.onload = function () {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = 'HT-HGNN_v2_Pipeline_Flowchart.png';
+    a.click();
+  };
+  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+}
+</script>
+</body>
+</html>

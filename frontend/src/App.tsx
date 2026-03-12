@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
 import { motion, useInView, useScroll, useTransform, AnimatePresence } from 'framer-motion';
+import TrainingDataPage from './pages/TrainingDataPage';
 import {
   AlertTriangle,
   Clock,
@@ -80,6 +81,7 @@ const NAV_ITEMS = [
   { id: 'suez-simulation', label: '🚢 Suez Crisis' },
   { id: 'indigo-simulation', label: '✈️ IndiGo Crisis' },
   { id: 'datasets', label: 'Datasets' },
+  { id: 'training-data', label: '📊 Training Data' },
   { id: 'try-it', label: 'Try It Live' },
   { id: 'results', label: 'Results' },
   { id: 'novelty', label: 'Novelty' },
@@ -953,7 +955,7 @@ const NetworkBackground: React.FC = () => {
    3. NAVBAR
    ----------------------------------------------------------------------- */
 
-const Navbar: React.FC = () => {
+const Navbar: React.FC<{ onNavigate?: (id: string) => void }> = ({ onNavigate }) => {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -964,7 +966,11 @@ const Navbar: React.FC = () => {
   }, []);
 
   const scrollTo = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+    if (id === 'training-data') {
+      onNavigate?.(id);
+    } else {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+    }
     setMobileOpen(false);
   };
 
@@ -5084,9 +5090,19 @@ const Footer: React.FC = () => (
    ----------------------------------------------------------------------- */
 
 function App() {
+  const [currentPage, setCurrentPage] = useState<string | null>(null);
+
+  if (currentPage === 'training-data') {
+    return <TrainingDataPage onBack={() => setCurrentPage(null)} />;
+  }
+
   return (
     <div className="bg-navy-900 min-h-screen">
-      <Navbar />
+      <Navbar onNavigate={(id) => {
+        if (id === 'training-data') {
+          setCurrentPage('training-data');
+        }
+      }} />
       <HeroSection />
       <ProblemSection />
       <SolutionSection />
