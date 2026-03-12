@@ -70,7 +70,7 @@ The system combines:
 ## Features
 
 - **Interactive Web Dashboard** — Upload CSV data and see predictions in real-time charts (criticality distribution, price predictions, scatter plots, top at-risk nodes)
-- **Multi-Dataset Support** — Trained and validated on 5 diverse real-world datasets
+- **Multi-Dataset Support** — Trained and validated on 6 diverse real-world datasets
 - **Live Cascade Simulation** — Simulate disruption propagation with configurable shock parameters
 - **HyperSHAP Explainability** — Understand *why* each node is flagged as risky
 - **REST API** — 14 endpoints including WebSocket for live training stream
@@ -195,6 +195,7 @@ SChypergraph/
 │   │   ├── data_adapter.py       #   Unified normalization layer
 │   │   ├── dataco_loader.py      #   DataCo logistics (180K records)
 │   │   ├── bom_loader.py         #   Automotive BOM (12K components)
+│   │   ├── indigo_disruption_loader.py #   IndiGo aviation disruption (84 nodes)
 │   │   ├── port_loader.py        #   Global port disruptions (847 ports)
 │   │   ├── maintenance_loader.py #   Predictive maintenance (10K records)
 │   │   └── retail_loader.py      #   M5 retail demand-supply (30K products)
@@ -240,7 +241,7 @@ SChypergraph/
 │   ├── vite.config.ts
 │   └── tailwind.config.js
 ├── scripts/                      # CLI utilities
-│   ├── download_datasets.py      #   Download all 5 datasets
+│   ├── download_datasets.py      #   Download all 6 datasets
 │   ├── build_hypergraphs.py      #   Pre-build hypergraph structures
 │   ├── simulate_cascade.py       #   Run cascade simulation
 │   ├── stress_tester.py          #   Bulk stress testing
@@ -259,6 +260,8 @@ SChypergraph/
 ├── Data set/                     # Raw datasets
 │   ├── DataCo/                   #   DataCoSupplyChainDataset.csv
 │   ├── BOM/                      #   train_set.csv, test_set.csv
+│   ├── IndiGo/                   #   indigo_disruption.csv
+│   ├── BOM/                      #   train_set.csv, test_set.csv
 │   └── Maintenance/              #   ai4i2020.csv
 ├── train_ht_hgnn.py              # Main training script (v2.0)
 ├── docker-compose.yml            # 4-service Docker Compose
@@ -272,12 +275,13 @@ SChypergraph/
 
 ## Datasets
 
-The model is trained and validated on **5 diverse real-world supply chain datasets**:
+The model is trained and validated on **6 diverse real-world supply chain datasets**:
 
 | Dataset | Domain | Records | Nodes | Hyperedges | Time Span | Source |
 |---------|--------|---------|-------|------------|-----------|--------|
 | **DataCo Supply Chain** | E-commerce Logistics | 180,519 | 10,862 | 1,247 | 2015–2018 | [Kaggle](https://www.kaggle.com/datasets/shashwatwork/dataco-smart-supply-chain-for-big-data-analysis) |
 | **Automotive BOM** | Manufacturing | 12,305 | 2,584 | 486 | 2020–2023 | [Kaggle](https://www.kaggle.com/datasets/willianoliveiragibin/tech-parts-orders) |
+| **IndiGo Aviation Disruption** | Aviation Service Chain | 84 | 84 | 18 | Jan–Dec 2025 | [DGCA India](https://www.dgca.gov.in) + Synthetic |
 | **Global Port Disruption** | Maritime Shipping | 847 | 456 | 312 | 2020–2024 | [Kaggle](https://www.kaggle.com/datasets/jeanmidev/world-ports) |
 | **AI4I Maintenance** | Predictive Maintenance | 10,000 | 10,000 | 874 | Synthetic | [UCI](https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset) |
 | **M5 Walmart Retail** | Retail Demand-Supply | 30,490 | 3,049 | 528 | 2011–2016 | [Kaggle](https://www.kaggle.com/c/m5-forecasting-accuracy) |
@@ -331,7 +335,7 @@ Base URL: `http://localhost:8000`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/datasets` | List all 5 available datasets |
+| `GET` | `/datasets` | List all 6 available datasets |
 | `POST` | `/datasets/{id}/load` | Build hypergraph for a dataset |
 | `POST` | `/explain` | HyperSHAP node attribution |
 | `POST` | `/simulate/cascade` | Start async cascade simulation |
@@ -483,13 +487,26 @@ The data is designed to show **realistic supply chain risk correlations**:
 
 Upload it in the **"Try It Live"** section of the frontend to test the system. The backend extracts real node names from the CSV and displays them in all charts and the risk table.
 
+### IndiGo Aviation Disruption Dataset (Dataset 6)
+
+The **IndiGo Aviation Disruption 2025** dataset (`Data set/IndiGo/indigo_disruption.csv`) models the December 2025 IndiGo scheduling crisis — a real-world multi-layer supply chain cascade in India's aviation sector.
+
+**Background:** DGCA's FDTL Phase 2 rules (effective Nov 1, 2025) reduced maximum pilot flying hours while IndiGo had ~60–70 aircraft grounded due to Pratt & Whitney powder-metal engine contamination. The combined shock caused ~4,500 flight cancellations over 10 days, affecting 9.82 lakh passengers, with OTP dropping from 84% → 62.7%.
+
+**Cascade path:** `FDTL Phase 2 Activation → Pilot Roster Buffer Collapse → Route Cancellations (Hub Airports) → Passenger Displacement (600K) → Railway Demand Surge → Competitor Fare Spike → Regulatory Intervention (10% Schedule Cut) → Market Share Redistribution`
+
+Run the cascade simulation with the built-in preset:
+```bash
+python scripts/simulate_cascade.py --preset indigo-fdtl
+```
+
 ---
 
 ## Scripts
 
 | Script | Description | Usage |
 |--------|-------------|-------|
-| `scripts/download_datasets.py` | Download all 5 datasets | `python scripts/download_datasets.py` |
+| `scripts/download_datasets.py` | Download all 6 datasets | `python scripts/download_datasets.py` |
 | `scripts/build_hypergraphs.py` | Pre-build hypergraph structures | `python scripts/build_hypergraphs.py` |
 | `scripts/simulate_cascade.py` | Run cascade simulation | `python scripts/simulate_cascade.py --dataset bom --shock-node NODE_001` |
 | `scripts/stress_tester.py` | Bulk stress testing | `python scripts/stress_tester.py --dataset dataco --scenarios 100` |

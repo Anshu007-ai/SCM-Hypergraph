@@ -2,8 +2,8 @@
 Unified Dataset Normalization Layer (HT-HGNN v2.0)
 
 DataAdapter normalizes all dataset sources into a common HT-HGNN input format.
-Accepts output from any of the 5 dataset loaders (dataco, bom, ports, maintenance,
-retail) and returns a standardized dictionary suitable for model training.
+Accepts output from any of the 6 dataset loaders (dataco, bom, ports, maintenance,
+retail, indigo) and returns a standardized dictionary suitable for model training.
 
 Standardized output format:
     - node_features:     (N x F) tensor of normalized node features
@@ -30,6 +30,7 @@ class DataAdapter:
         - PortDisruptionLoader (global port disruption)
         - MaintenanceLoader (predictive maintenance)
         - RetailLoader (retail M5 sales)
+        - IndiGoDisruptionLoader (aviation disruption 2025)
         - Static and dynamic hyperedge construction modes
 
     Example usage:
@@ -51,6 +52,7 @@ class DataAdapter:
         'ports': 6,
         'maintenance': 7,
         'retail': 6,
+        'indigo': 10,
     }
 
     def __init__(self, normalize: bool = True, feature_range: tuple = (0.0, 1.0)):

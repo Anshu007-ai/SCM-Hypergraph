@@ -73,6 +73,12 @@ except Exception:
     RETAIL_LOADER_AVAILABLE = False
 
 try:
+    from src.data.indigo_disruption_loader import IndiGoDisruptionLoader
+    INDIGO_LOADER_AVAILABLE = True
+except Exception:
+    INDIGO_LOADER_AVAILABLE = False
+
+try:
     from src.explainability.hypershap import HyperSHAP, NodeExplanation
     HYPERSHAP_AVAILABLE = True
 except Exception:
@@ -331,6 +337,18 @@ DATASET_CATALOG: Dict[str, DatasetInfo] = {
         hyperedge_count=528,
         time_span="2011-01 to 2016-06",
         features_per_node=6,
+    ),
+    "indigo": DatasetInfo(
+        id="indigo",
+        name="IndiGo Aviation Disruption 2025",
+        description="Dec 2025 IndiGo scheduling crisis — FDTL regulatory shock + "
+                    "P&W engine supply chain failure cascade affecting 9.8L passengers. "
+                    "Models airlines, airports, fleet clusters, pilot pools, MRO centres, "
+                    "and regulatory bodies across the aviation service supply chain.",
+        node_count=84,
+        hyperedge_count=18,
+        time_span="2025-01 to 2025-12",
+        features_per_node=10,
     ),
 }
 
@@ -852,6 +870,14 @@ async def load_dataset(dataset_id: str, body: DatasetLoadRequest):
 
         elif dataset_id == "retail" and RETAIL_LOADER_AVAILABLE:
             loader = RetailLoader(data_dir=data_dir)
+            result = loader.build_hypergraph()
+            hg = result.get("hypergraph") if isinstance(result, dict) else None
+            if hg and HYPERGRAPH_AVAILABLE:
+                LOADED_GRAPHS[dataset_id] = hg
+                graph_summary = _summarize_hypergraph(hg)
+
+        elif dataset_id == "indigo" and INDIGO_LOADER_AVAILABLE:
+            loader = IndiGoDisruptionLoader(data_dir=data_dir)
             result = loader.build_hypergraph()
             hg = result.get("hypergraph") if isinstance(result, dict) else None
             if hg and HYPERGRAPH_AVAILABLE:

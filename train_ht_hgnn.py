@@ -101,6 +101,12 @@ try:
 except ImportError:
     HAS_RETAIL = False
 
+try:
+    from src.data.indigo_disruption_loader import IndiGoDisruptionLoader
+    HAS_INDIGO = True
+except ImportError:
+    HAS_INDIGO = False
+
 # ---------------------------------------------------------------------------
 # Synthetic data generator (v1.0 compatibility)
 # ---------------------------------------------------------------------------
@@ -130,6 +136,7 @@ DATASET_REGISTRY: Dict[str, bool] = {
     "ports": HAS_PORTS,
     "maintenance": HAS_MAINTENANCE,
     "retail": HAS_RETAIL,
+    "indigo": HAS_INDIGO,
 }
 
 
@@ -149,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dataset",
         type=str,
         default="dataco",
-        choices=["dataco", "bom", "ports", "maintenance", "retail", "all"],
+        choices=["dataco", "bom", "ports", "maintenance", "retail", "indigo", "all"],
         help="Dataset to train on (default: dataco). Use 'all' for sequential training.",
     )
     parser.add_argument(
@@ -186,14 +193,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--pretrain",
         type=str,
         default=None,
-        choices=["dataco", "bom", "ports", "maintenance", "retail"],
+        choices=["dataco", "bom", "ports", "maintenance", "retail", "indigo"],
         help="Dataset to pretrain on before finetuning (optional).",
     )
     parser.add_argument(
         "--finetune",
         type=str,
         default=None,
-        choices=["dataco", "bom", "ports", "maintenance", "retail"],
+        choices=["dataco", "bom", "ports", "maintenance", "retail", "indigo"],
         help="Dataset to finetune on after pretraining (optional).",
     )
     parser.add_argument(
@@ -306,6 +313,12 @@ def _load_dataset_via_loader(
         if not HAS_RETAIL:
             raise ImportError("RetailLoader is not available.")
         loader = RetailLoader(data_dir=data_dir)
+        raw = loader.build_hypergraph()
+
+    elif dataset_name == "indigo":
+        if not HAS_INDIGO:
+            raise ImportError("IndiGoDisruptionLoader is not available.")
+        loader = IndiGoDisruptionLoader(data_dir=data_dir)
         raw = loader.build_hypergraph()
 
     else:

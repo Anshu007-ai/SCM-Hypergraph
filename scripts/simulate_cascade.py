@@ -83,6 +83,8 @@ def _load_hypergraph(dataset: str):
                         PROJECT_ROOT / "Data set" / "Maintenance"),
         "retail":      ("src.data.retail_loader",       "RetailLoader",
                         PROJECT_ROOT / "Data set" / "Retail"),
+        "indigo":      ("src.data.indigo_disruption_loader", "IndiGoDisruptionLoader",
+                        PROJECT_ROOT / "Data set"),
     }
 
     if dataset in loader_map:
@@ -204,13 +206,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--dataset",
-        required=True,
-        choices=["dataco", "bom", "ports", "maintenance", "retail"],
+        required=False,
+        choices=["dataco", "bom", "ports", "maintenance", "retail", "indigo"],
         help="Which dataset / hypergraph to load.",
     )
     parser.add_argument(
         "--shock-node",
-        required=True,
+        required=False,
         help="Node ID where the shock originates (e.g. S0010).",
     )
     parser.add_argument(
@@ -231,8 +233,28 @@ def main() -> None:
         default=DEFAULT_OUTPUT,
         help=f"Output JSON path (default: {DEFAULT_OUTPUT}).",
     )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default=None,
+        choices=["indigo-fdtl"],
+        help="Use a preset simulation configuration (e.g. indigo-fdtl).",
+    )
 
     args = parser.parse_args()
+
+    # --- Apply preset overrides ---
+    if args.preset == "indigo-fdtl":
+        args.dataset = "indigo"
+        args.shock_node = "REG_01"       # DGCA_FDTL_Compliance
+        args.shock_magnitude = 0.95
+        args.time_steps = 12
+        print("HT-HGNN v2.0 -- Cascade Simulation  [preset: indigo-fdtl]")
+        print("  Simulating FDTL Phase 2 regulatory shock cascade")
+        print("  Seed node: DGCA_FDTL_Compliance (REG_01)")
+    else:
+        if not args.dataset or not args.shock_node:
+            parser.error("--dataset and --shock-node are required unless --preset is used.")
 
     print("HT-HGNN v2.0 -- Cascade Simulation")
     print(f"  Dataset          : {args.dataset}")
