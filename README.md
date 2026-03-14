@@ -71,7 +71,9 @@ The system combines:
 
 - **Interactive Web Dashboard** — Upload CSV data and see predictions in real-time charts (criticality distribution, price predictions, scatter plots, top at-risk nodes)
 - **Multi-Dataset Support** — Trained and validated on 6 diverse real-world datasets
-- **Live Cascade Simulation** — Simulate disruption propagation with configurable shock parameters
+- **Live Cascade Simulation** — Simulate disruption propagation with configurable shock parameters and animated node-link diagrams
+- **MOO Pareto Analysis** — Interactive 4-objective Pareto front visualisation with weight sliders for ATC decision-making trade-offs
+- **IndiGo Case Study Timeline** — Animated 7-stage disruption timeline for the Nov 2025 IndiGo crisis with OTP degradation charts
 - **HyperSHAP Explainability** — Understand *why* each node is flagged as risky
 - **REST API** — 14 endpoints including WebSocket for live training stream
 - **Docker Deployment** — One-command deployment with `docker compose up`
@@ -233,6 +235,9 @@ SChypergraph/
 │   │   ├── main.tsx              #   React entry point
 │   │   ├── index.css             #   Dark theme + Tailwind utilities
 │   │   ├── components/           #   Reusable UI components
+│   │   │   ├── ParetoVisualiser.tsx   # MOO Pareto front with weight sliders
+│   │   │   ├── CascadeSimulation.tsx  # SVG node-link cascade animation
+│   │   │   └── IndiGoTimeline.tsx     # Animated 7-stage disruption timeline
 │   │   ├── pages/                #   Route pages
 │   │   ├── hooks/                #   Custom React hooks
 │   │   ├── services/             #   API service layer
@@ -376,8 +381,11 @@ The frontend is a **professional showcase website + interactive demo** built wit
 | **Solution** | Graph vs. Hypergraph visual comparison |
 | **Architecture** | 5-step horizontal pipeline flow |
 | **How It Predicts** | 6-step detailed prediction walkthrough |
-| **Datasets** | Expandable cards for all 5 datasets with source links |
-| **Try It Live** | **CSV upload → real-time charts** (pie, area, scatter, ranked table) |
+| **IndiGo Crisis Simulation** | Interactive 3D hypergraph disruption simulation for aviation sector |
+| **Datasets** | Expandable cards for all 6 datasets with source links |
+| **Case Study: IndiGo Timeline** | Animated 7-stage Nov 2025 disruption timeline with OTP chart |
+| **Try It Live** | **CSV upload → real-time charts** + interactive cascade simulation panel |
+| **MOO Pareto Analysis** | 4-objective Pareto front with weight sliders and operating point selection |
 | **Results** | Benchmark comparison + ablation study + detailed analysis |
 | **Novelty** | 3 research contributions |
 | **Team** | Team members |
