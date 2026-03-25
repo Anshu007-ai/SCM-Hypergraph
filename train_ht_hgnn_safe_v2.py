@@ -8,6 +8,11 @@ Features:
 - Production-grade logging
 - Checkpoint saving
 - Resource monitoring
+- MOO Ablation Study support for 2-stage pipeline
+
+MOO Integration:
+- Stage 1: Multi-Objective Optimization over aviation hypergraph
+- Stage 2: HT-HGNN neural network with MOO transfer mechanisms
 """
 
 import torch
@@ -22,6 +27,7 @@ import logging
 import warnings
 from typing import Dict, Tuple, Optional, List
 import sys
+import argparse
 from datetime import datetime
 
 # Suppress non-critical warnings
@@ -32,6 +38,20 @@ from src.models.ht_hgnn_model import (
     HeterogeneousTemporalHypergraphNN,
     MultiTaskLoss
 )
+
+# Import MOO ablation system
+from moo_ablation import (
+    MOOTransferConfig,
+    CONFIG_MAP,
+    CONFIG_FULL,
+    build_node_features,
+    get_loss_weights,
+    get_cascade_targets,
+    run_moo_ablation_study
+)
+
+# Import SSL loss functions
+from losses import ContrastiveMultiTaskLoss
 
 
 # Configure logging - UTF-8 safe format
@@ -133,16 +153,17 @@ class SafeDataValidator:
 
 class SafeHT_HGNN_Trainer:
     """
-    Production-ready trainer with comprehensive safety
-    
+    Production-ready trainer with comprehensive safety and MOO integration
+
     Features:
     - Safe device selection
     - Data validation
     - Memory monitoring
     - Checkpoint saving
     - Error recovery
+    - MOO Transfer Mechanism Support (Feature/Loss/HIC)
     """
-    
+
     def __init__(
         self,
         in_channels: int = 18,
@@ -153,17 +174,31 @@ class SafeHT_HGNN_Trainer:
         learning_rate: float = 0.001,
         weight_decay: float = 1e-5,
         use_amp: bool = True,
-        checkpoint_dir: str = 'outputs/checkpoints'
+        checkpoint_dir: str = 'outputs/checkpoints',
+        moo_config: Optional[MOOTransferConfig] = None,
+        ssl_temperature: float = 0.1,
+        ssl_weight: float = 0.1,
+        attention_type: str = 'structural'
     ):
-        """Initialize trainer with safety checks"""
-        
+        """Initialize trainer with safety checks, MOO support, SSL temperature control, and attention type"""
+
         # Create checkpoint directory
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Device management
         self.device = SafeDeviceManager.get_device()
-        
+
+        # MOO Configuration
+        self.moo_config = moo_config or CONFIG_FULL
+
+        # SSL Configuration
+        self.ssl_temperature = ssl_temperature
+        self.ssl_weight = ssl_weight
+
+        # Attention Configuration
+        self.attention_type = attention_type
+
         # Configuration
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
@@ -171,16 +206,31 @@ class SafeHT_HGNN_Trainer:
         self.num_nodes = num_nodes
         self.num_hyperedges = num_hyperedges
         self.use_amp = use_amp and self.device.type == 'cuda'
-        
-        logger.info("\n" + "="*70)
-        logger.info("HT-HGNN PRODUCTION TRAINER")
-        logger.info("="*70)
-        logger.info(f"Configuration:")
+
+        logger.info("\n" + "="*80)
+        logger.info("HT-HGNN PRODUCTION TRAINER WITH MOO INTEGRATION")
+        logger.info("="*80)
+        logger.info(f"Model Configuration:")
         logger.info(f"  Input channels: {in_channels}")
         logger.info(f"  Hidden channels: {hidden_channels}")
         logger.info(f"  Output channels: {out_channels}")
         logger.info(f"  Nodes: {num_nodes}")
         logger.info(f"  Hyperedges: {num_hyperedges}")
+        logger.info(f"")
+        logger.info(f"MOO Configuration: {self.moo_config.name}")
+        logger.info(f"  Description: {self.moo_config.description}")
+        logger.info(f"  Enabled mechanisms: {', '.join(self.moo_config.enabled_mechanisms) if self.moo_config.enabled_mechanisms else 'None'}")
+        logger.info(f"  Expected input dim: {self.moo_config.input_dim}")
+        logger.info(f"  Use MOO features: {self.moo_config.use_moo_features}")
+        logger.info(f"  Use MOO loss weights: {self.moo_config.use_moo_loss_weights}")
+        logger.info(f"  Use HIC targets: {self.moo_config.use_hic_targets}")
+        logger.info(f"")
+        logger.info(f"SSL Configuration:")
+        logger.info(f"  Temperature (τ): {self.ssl_temperature}")
+        logger.info(f"  SSL weight: {self.ssl_weight}")
+        logger.info(f"")
+        logger.info(f"Attention Configuration:")
+        logger.info(f"  Aggregation type: {self.attention_type}")
         logger.info(f"  Device: {self.device}")
         logger.info(f"  Mixed Precision: {self.use_amp}")
         
@@ -200,11 +250,13 @@ class SafeHT_HGNN_Trainer:
                 time_window=10
             ).to(self.device)
             
-            # Loss function
-            self.loss_fn = MultiTaskLoss(
+            # Loss function with SSL support
+            self.loss_fn = ContrastiveMultiTaskLoss(
                 weight_price=1.0,
                 weight_change=0.5,
-                weight_criticality=0.3
+                weight_criticality=0.3,
+                ssl_weight=self.ssl_weight,
+                ssl_temperature=self.ssl_temperature
             ).to(self.device)
             
             # Optimizer with weight decay
@@ -237,6 +289,7 @@ class SafeHT_HGNN_Trainer:
                 'loss_price': [],
                 'loss_change': [],
                 'loss_criticality': [],
+                'cascade_kl': [],
                 'learning_rates': []
             }
             
@@ -449,7 +502,126 @@ class SafeHT_HGNN_Trainer:
         except Exception as e:
             logger.error(f"[ERROR] Data preparation failed: {e}")
             raise
-    
+
+    def prepare_data_with_moo(
+        self,
+        moo_embedding: np.ndarray,
+        moo_knee_weights: np.ndarray,
+        hic_targets: np.ndarray,
+        features_csv: str = 'outputs/datasets/features.csv',
+        hci_csv: str = 'outputs/datasets/hci_labels.csv',
+        incidence_csv: str = 'outputs/datasets/incidence.csv'
+    ) -> Dict:
+        """
+        Prepare data with MOO transfer mechanisms integrated
+
+        Args:
+            moo_embedding: (4,) MOO knee-point embedding to append to features
+            moo_knee_weights: (4,) MOO solution for loss weight initialization
+            hic_targets: (N,) HIC cascade targets for KL divergence
+
+        Returns:
+            Dict with MOO-integrated data including:
+            - node_features: Enhanced with MOO features if enabled
+            - loss_weights: MOO-calibrated weights if enabled
+            - cascade_targets: HIC targets if enabled
+        """
+
+        logger.info("\n" + "-"*70)
+        logger.info(f"MOO DATA PREPARATION - {self.moo_config.name}")
+        logger.info("-"*70)
+
+        # Start with standard data preparation
+        data = self.prepare_data(features_csv, hci_csv, incidence_csv)
+
+        # --- MOO MECHANISM 1: Feature-level integration ---
+        if self.moo_config.use_moo_features:
+            logger.info("[MOO] Integrating 4-dim MOO embedding into node features")
+
+            # Get current node features
+            node_features = data['X'].cpu().numpy()  # (N, 18)
+
+            # Expand MOO embedding to all nodes
+            moo_features = np.tile(moo_embedding, (self.num_nodes, 1))  # (N, 4)
+
+            # Concatenate: (N, 18) + (N, 4) = (N, 22)
+            enhanced_features = np.concatenate([node_features, moo_features], axis=1)
+
+            # Update tensor
+            data['X'] = torch.FloatTensor(enhanced_features).to(self.device)
+
+            logger.info(f"   Original features: {node_features.shape}")
+            logger.info(f"   MOO embedding: {moo_embedding.shape}")
+            logger.info(f"   Enhanced features: {enhanced_features.shape}")
+        else:
+            logger.info("[MOO] Feature integration DISABLED")
+
+        # --- MOO MECHANISM 2: Loss weight initialization ---
+        if self.moo_config.use_moo_loss_weights:
+            logger.info("[MOO] Using MOO knee-point for loss weight initialization")
+
+            # Update loss function weights
+            self.loss_fn.weight_price = float(moo_knee_weights[0])
+            self.loss_fn.weight_change = float(moo_knee_weights[1])
+            self.loss_fn.weight_criticality = float(moo_knee_weights[2])
+            # Note: 4th weight could be for a future task
+
+            loss_weights = moo_knee_weights[:3]
+
+            logger.info(f"   Price weight: {loss_weights[0]:.4f}")
+            logger.info(f"   Change weight: {loss_weights[1]:.4f}")
+            logger.info(f"   Criticality weight: {loss_weights[2]:.4f}")
+        else:
+            logger.info("[MOO] Loss weight integration DISABLED - using defaults")
+            loss_weights = np.array([1.0, 0.5, 0.3])
+
+        # Add to data dict
+        data['loss_weights'] = torch.FloatTensor(loss_weights).to(self.device)
+
+        # --- MOO MECHANISM 3: HIC cascade targets ---
+        if self.moo_config.use_hic_targets:
+            logger.info("[MOO] Using HIC cascade simulation targets")
+
+            # Ensure correct shape and convert to tensor
+            if len(hic_targets) != self.num_nodes:
+                logger.warning(f"   HIC targets shape mismatch: {len(hic_targets)} vs {self.num_nodes}")
+                # Pad or truncate as needed
+                if len(hic_targets) > self.num_nodes:
+                    hic_targets = hic_targets[:self.num_nodes]
+                else:
+                    padding = np.zeros(self.num_nodes - len(hic_targets))
+                    hic_targets = np.concatenate([hic_targets, padding])
+
+            cascade_targets = torch.FloatTensor(hic_targets).to(self.device)
+
+            logger.info(f"   HIC targets shape: {cascade_targets.shape}")
+            logger.info(f"   HIC range: [{cascade_targets.min():.4f}, {cascade_targets.max():.4f}]")
+        else:
+            logger.info("[MOO] HIC target integration DISABLED - using zeros")
+            cascade_targets = torch.zeros(self.num_nodes).to(self.device)
+
+        # Add to data dict
+        data['cascade_targets'] = cascade_targets
+
+        # --- Final validation ---
+        logger.info(f"\n[MOO] Final data validation:")
+        logger.info(f"   Node features: {data['X'].shape}")
+        logger.info(f"   Loss weights: {data['loss_weights'].shape}")
+        logger.info(f"   Cascade targets: {data['cascade_targets'].shape}")
+        logger.info(f"   Expected input channels: {self.moo_config.input_dim}")
+
+        # Update model input channels if needed
+        actual_channels = data['X'].shape[1]
+        expected_channels = self.moo_config.input_dim
+
+        if actual_channels != expected_channels:
+            logger.warning(f"[MOO] Channel mismatch: {actual_channels} vs {expected_channels}")
+            logger.warning("   Model may need re-initialization with correct input_dim")
+
+        logger.info(f"[MOO] Data preparation complete with {self.moo_config.name} configuration")
+
+        return data
+
     def train_epoch(self, data: Dict) -> Dict:
         """Safely train single epoch with AMP"""
         self.model.train()
@@ -475,6 +647,19 @@ class SafeHT_HGNN_Trainer:
                         criticality_pred=output['criticality'],
                         criticality_target=data['y_criticality']
                     )
+
+                    # MOO Mechanism 3: Add HIC cascade KL divergence loss
+                    if self.moo_config.use_hic_targets and 'cascade_targets' in data:
+                        cascade_pred = torch.softmax(output['cascade_scores'], dim=0)
+                        cascade_target = torch.softmax(data['cascade_targets'], dim=0)
+
+                        kl_loss = nn.functional.kl_div(
+                            cascade_pred.log(), cascade_target, reduction='batchmean'
+                        )
+
+                        # Add to total loss with small weight
+                        loss_dict['cascade_kl'] = kl_loss
+                        loss_dict['total_loss'] = loss_dict['total_loss'] + 0.1 * kl_loss
                 
                 self.scaler.scale(loss_dict['total_loss']).backward()
                 self.scaler.unscale_(self.optimizer)
@@ -499,6 +684,19 @@ class SafeHT_HGNN_Trainer:
                     criticality_pred=output['criticality'],
                     criticality_target=data['y_criticality']
                 )
+
+                # MOO Mechanism 3: Add HIC cascade KL divergence loss
+                if self.moo_config.use_hic_targets and 'cascade_targets' in data:
+                    cascade_pred = torch.softmax(output['cascade_scores'], dim=0)
+                    cascade_target = torch.softmax(data['cascade_targets'], dim=0)
+
+                    kl_loss = nn.functional.kl_div(
+                        cascade_pred.log(), cascade_target, reduction='batchmean'
+                    )
+
+                    # Add to total loss with small weight
+                    loss_dict['cascade_kl'] = kl_loss
+                    loss_dict['total_loss'] = loss_dict['total_loss'] + 0.1 * kl_loss
                 
                 loss_dict['total_loss'].backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -536,6 +734,7 @@ class SafeHT_HGNN_Trainer:
                     self.history['loss_price'].append(loss_dict['loss_price'])
                     self.history['loss_change'].append(loss_dict['loss_change'])
                     self.history['loss_criticality'].append(loss_dict['loss_criticality'])
+                    self.history['cascade_kl'].append(loss_dict.get('cascade_kl', 0.0))
                     self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
                     
                     # Scheduler step
@@ -553,6 +752,8 @@ class SafeHT_HGNN_Trainer:
                         logger.info(f"  Price Loss:       {loss_dict['loss_price']:.6f}")
                         logger.info(f"  Change Loss:      {loss_dict['loss_change']:.6f}")
                         logger.info(f"  Criticality Loss: {loss_dict['loss_criticality']:.6f}")
+                        if 'cascade_kl' in loss_dict:
+                            logger.info(f"  Cascade KL Loss:  {loss_dict['cascade_kl']:.6f}")
                         logger.info(f"  LR:               {self.optimizer.param_groups[0]['lr']:.2e}")
                     
                     # Save checkpoint
@@ -582,63 +783,278 @@ class SafeHT_HGNN_Trainer:
 
 
 def main():
-    """Safe main execution"""
+    """Safe main execution with MOO ablation support"""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='HT-HGNN Training with MOO Ablation Study')
+    parser.add_argument(
+        '--moo_mode',
+        type=str,
+        default='full',
+        choices=['full', 'no_feature', 'no_loss', 'no_hic', 'none', 'ablation_study'],
+        help='MOO transfer mechanism mode (default: full). Use "ablation_study" to run all configurations.'
+    )
+    parser.add_argument(
+        '--epochs',
+        type=int,
+        default=50,
+        help='Number of training epochs (default: 50)'
+    )
+    parser.add_argument(
+        '--ablation_epochs',
+        type=int,
+        default=30,
+        help='Number of epochs per config in ablation study (default: 30)'
+    )
+    parser.add_argument(
+        '--save_models',
+        action='store_true',
+        help='Save models during ablation study'
+    )
+    parser.add_argument(
+        '--ssl_temperature',
+        type=float,
+        default=0.1,
+        help='Temperature parameter (tau) for NT-Xent contrastive loss (default: 0.1)'
+    )
+    parser.add_argument(
+        '--attention_type',
+        type=str,
+        default='structural',
+        choices=['uniform', 'scalar', 'structural'],
+        help='Hyperedge aggregation method: uniform (mean pooling), scalar (learned attention), structural (distance-based) (default: structural)'
+    )
+
+    args = parser.parse_args()
+
+    # Initialize MOO configuration
+    if args.moo_mode == 'ablation_study':
+        moo_config = None  # Will run all configs
+    else:
+        moo_config = CONFIG_MAP.get(args.moo_mode, CONFIG_FULL)
+
     start_time = datetime.now()
-    logger.info(f"Session started: {start_time}")
-    
+    logger.info(f"🚀 Session started: {start_time}")
+
+    if args.moo_mode == 'ablation_study':
+        logger.info(f"🔬 Mode: Full MOO Ablation Study ({len(CONFIG_MAP)} configurations)")
+        logger.info(f"⚙️  Epochs per config: {args.ablation_epochs}")
+    else:
+        logger.info(f"🎯 Mode: Single Configuration - {moo_config.name}")
+        logger.info(f"🗲 Mechanisms: {', '.join(moo_config.enabled_mechanisms) if moo_config.enabled_mechanisms else 'None (Pure Neural)'}")
+        logger.info(f"⚙️  Epochs: {args.epochs}")
+
+    logger.info(f"🌡️ SSL Temperature (τ): {args.ssl_temperature}")
+    logger.info(f"🔗 Attention Type: {args.attention_type}")
+
     try:
-        # Initialize trainer
-        trainer = SafeHT_HGNN_Trainer(
-            in_channels=18,
-            hidden_channels=64,
-            out_channels=32,
-            num_nodes=1206,
-            num_hyperedges=36,
-            learning_rate=0.001,
-            weight_decay=1e-5,
-            use_amp=True
-        )
-        
-        # Prepare data
-        data = trainer.prepare_data()
-        
-        # Train
-        history = trainer.train(data, epochs=50, verbose=True, save_interval=10)
-        
-        # Save final model
-        trainer.save_checkpoint(50, is_best=True)
-        
-        # Save history
-        history_path = Path('outputs/training_history.json')
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        history_to_save = {
-            k: [float(v) if isinstance(v, np.floating) else v for v in vals]
-            for k, vals in history.items()
-        }
-        
-        with open(history_path, 'w') as f:
-            json.dump(history_to_save, f, indent=2)
-        
-        logger.info(f"[OUTPUT] Training history saved to {history_path}")
-        
+        if args.moo_mode == 'ablation_study':
+            # Run full ablation study
+            results = run_moo_ablation_study_pipeline(
+                epochs=args.ablation_epochs,
+                save_models=args.save_models,
+                ssl_temperature=args.ssl_temperature,
+                attention_type=args.attention_type
+            )
+            logger.info(f"🎉 Ablation study completed with {len(results)} results")
+        else:
+            # Run single configuration training
+            results = train_single_moo_config(
+                moo_config=moo_config,
+                epochs=args.epochs,
+                ssl_temperature=args.ssl_temperature,
+                attention_type=args.attention_type
+            )
+            logger.info(f"🎉 Single configuration training completed")
+
         # Summary
         end_time = datetime.now()
         duration = end_time - start_time
-        
-        logger.info("\n" + "="*70)
+
+        logger.info("\n" + "="*80)
         logger.info("TRAINING COMPLETE")
-        logger.info("="*70)
+        logger.info("="*80)
         logger.info(f"Duration: {duration}")
-        logger.info(f"Final Loss: {history['loss'][-1]:.6f}")
-        logger.info(f"Improvement: {(history['loss'][0] - history['loss'][-1]) / history['loss'][0] * 100:.1f}%")
-        logger.info(f"Model saved: outputs/checkpoints/best.pt")
-        logger.info("="*70)
-    
+        logger.info(f"Mode: {args.moo_mode}")
+
+        if args.moo_mode != 'ablation_study':
+            logger.info(f"Final Loss: {results.get('final_loss', 'N/A')}")
+            logger.info(f"Best Validation Accuracy: {results.get('best_val_acc', 'N/A')}")
+        else:
+            logger.info(f"Configurations tested: {len(results)}")
+
+        logger.info("="*80)
+
     except Exception as e:
         logger.error(f"\n[FATAL] Training failed: {e}")
         logger.error("[FATAL] Check logs for details.")
         raise
+
+
+def train_single_moo_config(
+    moo_config: MOOTransferConfig,
+    epochs: int = 50,
+    ssl_temperature: float = 0.1,
+    attention_type: str = 'structural'
+) -> Dict:
+    """
+    Train HT-HGNN with a specific MOO configuration.
+
+    Args:
+        moo_config: MOO transfer configuration
+        epochs: Number of training epochs
+        ssl_temperature: Temperature parameter for NT-Xent loss
+        attention_type: Hyperedge aggregation method
+
+    Returns:
+        Dictionary with training results
+    """
+    logger.info(f"🔧 Initializing trainer for {moo_config.name}")
+
+    # Generate synthetic MOO data (replace with real MOO outputs)
+    moo_embedding = torch.randn(1206, 4)  # 4-dim MOO knee-point embedding
+    moo_knee_weights = torch.tensor([1.2, 0.9, 1.1, 0.7])  # MOO-optimized loss weights
+    hic_targets = torch.randn(1206, 4)  # MOO-calibrated HIC cascade targets
+    hic_targets = torch.softmax(hic_targets, dim=1)  # Normalize to probabilities
+
+    # Initialize trainer
+    trainer = SafeHT_HGNN_Trainer(
+        in_channels=moo_config.input_dim,  # Always 16 (12 raw + 4 MOO or zero-padded)
+        hidden_channels=64,
+        out_channels=32,
+        num_nodes=1206,
+        num_hyperedges=36,
+        learning_rate=0.001,
+        weight_decay=1e-5,
+        use_amp=True,
+        moo_config=moo_config,
+        ssl_temperature=ssl_temperature,
+        attention_type=attention_type
+    )
+
+    # Prepare data with MOO integration
+    data = trainer.prepare_data_with_moo(
+        moo_embedding=moo_embedding,
+        moo_knee_weights=moo_knee_weights,
+        hic_targets=hic_targets
+    )
+
+    logger.info(f"📊 Training with {moo_config.name} configuration")
+    logger.info(f"   Feature dims: {data['node_features'].shape[1]}")
+    logger.info(f"   Loss weights: {data['loss_weights'].tolist()}")
+    logger.info(f"   HIC targets shape: {data['cascade_targets'].shape}")
+
+    # Train
+    history = trainer.train(data, epochs=epochs, verbose=True, save_interval=10)
+
+    # Save final model
+    trainer.save_checkpoint(epochs, is_best=True)
+
+    # Save history with MOO config info
+    history_path = Path(f'outputs/training_history_{moo_config.name.lower().replace(" ", "_")}.json')
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    history_to_save = {
+        'config_name': moo_config.name,
+        'config_description': moo_config.description,
+        'enabled_mechanisms': moo_config.enabled_mechanisms,
+        'history': {
+            k: [float(v) if isinstance(v, np.floating) else v for v in vals]
+            for k, vals in history.items()
+        }
+    }
+
+    with open(history_path, 'w') as f:
+        json.dump(history_to_save, f, indent=2)
+
+    logger.info(f"📁 Training history saved to {history_path}")
+
+    return {
+        'final_loss': history['loss'][-1],
+        'best_val_acc': max(history.get('val_accuracy', [0.0])) if 'val_accuracy' in history else 0.0,
+        'convergence_epoch': len(history['loss']),
+        'config_name': moo_config.name
+    }
+
+
+def run_moo_ablation_study_pipeline(
+    epochs: int = 30,
+    save_models: bool = False,
+    ssl_temperature: float = 0.1,
+    attention_type: str = 'structural'
+) -> pd.DataFrame:
+    """
+    Run complete MOO ablation study pipeline.
+
+    Args:
+        epochs: Number of epochs per configuration
+        save_models: Whether to save trained models
+        ssl_temperature: Temperature parameter for NT-Xent loss
+        attention_type: Hyperedge aggregation method
+
+    Returns:
+        DataFrame with ablation study results
+    """
+    logger.info("🔬 Starting MOO Ablation Study")
+    logger.info("="*60)
+
+    # Prepare synthetic MOO data (replace with real MOO outputs)
+    moo_embedding = torch.randn(1206, 4)
+    moo_knee_weights = torch.tensor([1.2, 0.9, 1.1, 0.7])
+    hic_targets = torch.randn(1206, 4)
+    hic_targets = torch.softmax(hic_targets, dim=1)
+
+    # Prepare synthetic data (replace with real data loading)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    train_data = {
+        'features': torch.randn(1000, 12),  # Raw features before MOO enhancement
+        'labels': torch.randint(0, 4, (1000,)),
+        'incidence_matrix': torch.randn(36, 1000),
+        'node_types': ['supplier'] * 334 + ['part'] * 333 + ['transaction'] * 333,
+        'edge_index': torch.randint(0, 1000, (2, 2000)),
+        'edge_types': ['supplies', 'uses', 'prices'] * 667,
+        'timestamps': torch.linspace(0, 10, 1000),
+        'num_hyperedges': 36
+    }
+
+    val_data = {
+        'features': torch.randn(200, 12),
+        'labels': torch.randint(0, 4, (200,)),
+        'incidence_matrix': torch.randn(36, 200),
+        'node_types': ['supplier'] * 67 + ['part'] * 67 + ['transaction'] * 66,
+        'edge_index': torch.randint(0, 200, (2, 400)),
+        'edge_types': ['supplies', 'uses', 'prices'] * 134,
+        'timestamps': torch.linspace(0, 10, 200),
+        'num_hyperedges': 36
+    }
+
+    test_data = {
+        'features': torch.randn(100, 12),
+        'labels': torch.randint(0, 4, (100,)),
+        'incidence_matrix': torch.randn(36, 100),
+        'node_types': ['supplier'] * 34 + ['part'] * 33 + ['transaction'] * 33,
+        'edge_index': torch.randint(0, 100, (2, 200)),
+        'edge_types': ['supplies', 'uses', 'prices'] * 67,
+        'timestamps': torch.linspace(0, 10, 100),
+        'num_hyperedges': 36
+    }
+
+    # Run ablation study
+    results = run_moo_ablation_study(
+        train_data=train_data,
+        val_data=val_data,
+        test_data=test_data,
+        base_model_class=HeterogeneousTemporalHypergraphNN,
+        moo_embedding=moo_embedding[:train_data['features'].size(0)],  # Match train size
+        moo_knee_weights=moo_knee_weights,
+        hic_targets=hic_targets[:train_data['features'].size(0)],  # Match train size
+        epochs=epochs,
+        device=device,
+        save_models=save_models,
+        output_dir='outputs/moo_ablation'
+    )
+
+    return results
 
 
 if __name__ == "__main__":

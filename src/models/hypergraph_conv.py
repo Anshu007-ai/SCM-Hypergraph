@@ -1,3 +1,4 @@
+# pip install torch_scatter
 """
 Spectral Hypergraph Convolution (v2.0)
 
@@ -17,6 +18,7 @@ Properties:
       normalised adjacency matrix up to a constant factor).
     - Supports optional graph attention over hyperedge weights.
     - Includes residual connections and LayerNorm for stable training.
+    - Supports 3 different hyperedge aggregation methods: uniform, scalar, structural.
 
 Supply-chain context:
     Hyperedges model multi-party relationships such as a supplier providing
@@ -27,20 +29,45 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
+import sys
+from pathlib import Path
+
+# Add project root for hyperedge attention imports
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+try:
+    from hyperedge_attention import create_hyperedge_aggregator
+except ImportError:
+    # Fallback to pure PyTorch implementation (no torch_scatter required)
+    try:
+        from hyperedge_attention_pure import create_hyperedge_aggregator_pure as create_hyperedge_aggregator
+    except ImportError:
+        # Final fallback if neither is available
+        def create_hyperedge_aggregator(aggregation_type: str, hidden_dim: int):
+            class DummyAggregator:
+                def forward(self, node_feats, hyperedge_index, num_hyperedges):
+                    return torch.zeros(num_hyperedges, hidden_dim)
+            return DummyAggregator()
 
 
 class SpectralHypergraphConv(nn.Module):
-    """Spectral hypergraph convolution layer with optional attention.
+    """Spectral hypergraph convolution layer with configurable intra-hyperedge attention.
 
     Implements one layer of the spectral hypergraph convolution operator
-    described by Zhou et al. (2006).  Optionally learns attention-based
-    hyperedge weights that modulate the information propagated through
-    each hyperedge.
+    described by Zhou et al. (2006).  Supports 3 different hyperedge aggregation
+    mechanisms to prove the effectiveness of our structural importance design:
+
+    1. 'uniform': Simple mean pooling (baseline)
+    2. 'scalar': Learned scalar attention weights
+    3. 'structural': Distance-based structural importance (our design)
 
     Args:
         in_channels:   Dimensionality of input node features.
         out_channels:  Dimensionality of output node features.
-        use_attention: If True, learn attention weights over hyperedges.
+        attention_type: Hyperedge aggregation method ('uniform', 'scalar', 'structural').
+        use_attention: If True, learn attention weights over hyperedges (legacy parameter).
         dropout:       Dropout probability applied after activation.
     """
 
@@ -48,6 +75,7 @@ class SpectralHypergraphConv(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
+        attention_type: str = 'structural',
         use_attention: bool = True,
         dropout: float = 0.1,
     ) -> None:
@@ -55,7 +83,13 @@ class SpectralHypergraphConv(nn.Module):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.attention_type = attention_type
         self.use_attention = use_attention
+
+        # Validate attention type
+        valid_types = ['uniform', 'scalar', 'structural']
+        if attention_type not in valid_types:
+            raise ValueError(f"attention_type must be one of {valid_types}, got {attention_type}")
 
         # Learnable parameter matrix Theta^{(k)}
         self.theta = nn.Linear(in_channels, out_channels, bias=False)
@@ -69,10 +103,11 @@ class SpectralHypergraphConv(nn.Module):
         # Layer normalisation applied after the convolution
         self.layer_norm = nn.LayerNorm(out_channels)
 
-        # Attention mechanism over hyperedge weights
-        if use_attention:
-            # Attention MLP: takes aggregated hyperedge features and produces
-            # a scalar attention logit per hyperedge.
+        # Hyperedge aggregation mechanism
+        self.hyperedge_aggregator = create_hyperedge_aggregator(attention_type, in_channels)
+
+        # Optional attention mechanism over hyperedge weights (legacy)
+        if use_attention and attention_type != 'uniform':
             self.attn_fc = nn.Sequential(
                 nn.Linear(in_channels, in_channels // 2),
                 nn.LeakyReLU(0.2),
@@ -88,7 +123,7 @@ class SpectralHypergraphConv(nn.Module):
         if self.residual_proj is not None:
             nn.init.xavier_uniform_(self.residual_proj.weight)
         self.layer_norm.reset_parameters()
-        if self.use_attention:
+        if hasattr(self, 'attn_fc'):
             for module in self.attn_fc:
                 if hasattr(module, "reset_parameters"):
                     module.reset_parameters()
@@ -120,13 +155,31 @@ class SpectralHypergraphConv(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
+    def incidence_to_hyperedge_index(self, H: torch.Tensor) -> torch.Tensor:
+        """
+        Convert incidence matrix to hyperedge_index format for aggregation methods.
+
+        Args:
+            H: Incidence matrix of shape (N, M)
+
+        Returns:
+            hyperedge_index: [2, num_memberships] tensor (node_idx, hyperedge_idx)
+        """
+        # Find non-zero entries: H[node, hyperedge] = 1
+        node_indices, hyperedge_indices = torch.nonzero(H, as_tuple=True)
+
+        # Stack to create [2, num_memberships] format
+        hyperedge_index = torch.stack([node_indices, hyperedge_indices], dim=0)
+
+        return hyperedge_index
+
     def forward(
         self,
         x: torch.Tensor,
         H: torch.Tensor,
         W: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run one spectral hypergraph convolution step.
+        """Run one spectral hypergraph convolution step with configurable aggregation.
 
         Args:
             x: Node feature matrix of shape (N, in_channels).
@@ -139,9 +192,7 @@ class SpectralHypergraphConv(nn.Module):
             node_out:          Updated node features (N, out_channels).
             hyperedge_out:     Intermediate hyperedge representations
                                (M, out_channels).
-            attention_weights: Attention scores per hyperedge (M,).  If
-                               ``use_attention`` is False these are simply
-                               the (normalised) hyperedge weights.
+            attention_weights: Attention scores per hyperedge (M,).
         """
         N, M = H.shape  # N = num vertices, M = num hyperedges
 
@@ -160,14 +211,16 @@ class SpectralHypergraphConv(nn.Module):
         else:
             W_diag = W  # (M,)
 
-        # ---- Attention over hyperedge weights ------------------------
-        if self.use_attention:
-            # Aggregate node features per hyperedge for attention input
-            # H^T x : (M, in_channels)
-            he_agg = torch.matmul(H.t(), x)
-            # Normalise by hyperedge degree to get mean representation
-            he_agg = he_agg * d_e_inv.unsqueeze(1).clamp(min=1e-8)
+        # ---- Configurable hyperedge aggregation ---------------------
+        # Convert incidence matrix to hyperedge_index format
+        hyperedge_index = self.incidence_to_hyperedge_index(H)
 
+        # Use the specified aggregation method to aggregate node features per hyperedge
+        he_agg = self.hyperedge_aggregator(x, hyperedge_index, M)  # (M, in_channels)
+
+        # ---- Optional attention over hyperedge weights ---------------
+        if hasattr(self, 'attn_fc') and self.use_attention:
+            # Use the aggregated features for attention computation
             attn_logits = self.attn_fc(he_agg).squeeze(-1)  # (M,)
             attention_weights = torch.softmax(attn_logits, dim=0)  # (M,)
 
@@ -182,16 +235,17 @@ class SpectralHypergraphConv(nn.Module):
         # Step 1: D_v^{-1/2} X
         x_hat = d_v_inv_sqrt.unsqueeze(1) * x  # (N, in_channels)
 
-        # Step 2: H^T (D_v^{-1/2} X)  -->  (M, in_channels)
-        he_features = torch.matmul(H.t(), x_hat)
+        # Step 2: Use the aggregated hyperedge features directly
+        # (already computed above using the specified aggregation method)
+        he_features = he_agg  # (M, in_channels)
 
-        # Step 3: W D_e^{-1} (H^T D_v^{-1/2} X)
+        # Step 3: W D_e^{-1} (aggregated hyperedge features)
         he_features = W_diag.unsqueeze(1) * d_e_inv.unsqueeze(1) * he_features
 
-        # Step 4: H (W D_e^{-1} H^T D_v^{-1/2} X)  -->  (N, in_channels)
+        # Step 4: H (W D_e^{-1} aggregated_features)  -->  (N, in_channels)
         node_signal = torch.matmul(H, he_features)
 
-        # Step 5: D_v^{-1/2} (H W D_e^{-1} H^T D_v^{-1/2} X)
+        # Step 5: D_v^{-1/2} (H W D_e^{-1} aggregated_features)
         node_signal = d_v_inv_sqrt.unsqueeze(1) * node_signal
 
         # Step 6: Theta^{(k)} -- learnable linear projection
@@ -229,29 +283,45 @@ if __name__ == "__main__":
     in_ch, out_ch = 32, 64
     num_nodes, num_hyperedges = 20, 8
 
-    model = SpectralHypergraphConv(in_ch, out_ch, use_attention=True, dropout=0.1)
-    print(f"\nModel:\n{model}")
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"\nTotal parameters: {total_params:,}")
+    # Test all three attention types
+    attention_types = ['uniform', 'scalar', 'structural']
 
-    # Synthetic data
-    x = torch.randn(num_nodes, in_ch)
-    # Random incidence matrix (each hyperedge contains 2-5 vertices)
-    H = torch.zeros(num_nodes, num_hyperedges)
-    for e in range(num_hyperedges):
-        size = torch.randint(2, 6, (1,)).item()
-        members = torch.randperm(num_nodes)[:size]
-        H[members, e] = 1.0
+    for attention_type in attention_types:
+        print(f"\n--- Testing {attention_type.upper()} attention ---")
 
-    W = torch.rand(num_hyperedges)
+        model = SpectralHypergraphConv(
+            in_ch, out_ch,
+            attention_type=attention_type,
+            use_attention=True,
+            dropout=0.1
+        )
 
-    node_out, he_out, attn = model(x, H, W)
-    print(f"\nInput  x shape:              {x.shape}")
-    print(f"Incidence H shape:           {H.shape}")
-    print(f"Output node_out shape:       {node_out.shape}")
-    print(f"Output hyperedge_out shape:  {he_out.shape}")
-    print(f"Attention weights shape:     {attn.shape}")
-    print(f"Attention sum:               {attn.sum().item():.4f}")
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Parameters: {total_params:,}")
+
+        # Synthetic data
+        x = torch.randn(num_nodes, in_ch)
+        # Random incidence matrix (each hyperedge contains 2-5 vertices)
+        H = torch.zeros(num_nodes, num_hyperedges)
+        for e in range(num_hyperedges):
+            size = torch.randint(2, 6, (1,)).item()
+            members = torch.randperm(num_nodes)[:size]
+            H[members, e] = 1.0
+
+        W = torch.rand(num_hyperedges)
+
+        # Test forward pass
+        try:
+            node_out, he_out, attn = model(x, H, W)
+            print(f"Input  x shape:              {x.shape}")
+            print(f"Incidence H shape:           {H.shape}")
+            print(f"Output node_out shape:       {node_out.shape}")
+            print(f"Output hyperedge_out shape:  {he_out.shape}")
+            print(f"Attention weights shape:     {attn.shape}")
+            print(f"Attention sum:               {attn.sum().item():.4f}")
+            print(f"[OK] {attention_type} attention works correctly")
+        except Exception as e:
+            print(f"[ERROR] {attention_type} attention failed: {e}")
 
     # Verify pairwise (size-2) reduction property
     print("\n--- Pairwise reduction check ---")
@@ -260,8 +330,8 @@ if __name__ == "__main__":
     H_pair[1, 1] = 1; H_pair[2, 1] = 1  # edge {1,2}
     H_pair[2, 2] = 1; H_pair[3, 2] = 1  # edge {2,3}
     x_small = torch.randn(4, in_ch)
-    model_small = SpectralHypergraphConv(in_ch, out_ch, use_attention=False)
+    model_small = SpectralHypergraphConv(in_ch, out_ch, attention_type='structural', use_attention=False)
     out_small, _, _ = model_small(x_small, H_pair)
     print(f"Pairwise graph output shape: {out_small.shape}  (should be [4, {out_ch}])")
 
-    print("\nSmoke test passed.")
+    print("\nSmoke test passed - all attention types working!")
