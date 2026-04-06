@@ -1,0 +1,22 @@
+[0;34m================================================================================================[0m
+[0;34m  HT-HGNN JOURNAL EXPERIMENTS SUITE[0m
+[0;34m================================================================================================[0m
+Starting comprehensive experimental evaluation for journal submission
+Timestamp: Tue Mar 31 00:17:35 IST 2026
+Results directory: journal_results/journal_experiments_20260331_001735
+
+[0;34m[INFO][0m Checking prerequisites...
+[0;34m[INFO][0m Verifying Python dependencies...
+[0;32m[SUCCESS][0m Created experiment directory: journal_results/journal_experiments_20260331_001735
+[0;34m[INFO][0m Collecting system information...
+[0;34m[INFO][0m Planning to run 5 experiments
+
+[0;34m================================================================================================[0m
+[0;34m  EXPERIMENT 1: Core Training and Evaluation[0m
+[0;34m================================================================================================[0m
+[1;33m[TIME ESTIMATE][0m This experiment may take 40-50 minutes
+Arguments: --split_mode temporal --gap_hours 72 --moo_mode full --ssl_temperature 0.1 --attention_type structural
+Output directory: journal_results/journal_experiments_20260331_001735/exp_1
+
+[0;34m[INFO][0m Executing: python train.py --split_mode temporal --gap_hours 72 --moo_mode full --ssl_temperature 0.1 --attention_type structural --output_dir journal_results/journal_experiments_20260331_001735/exp_1
+[0;34m[INFO][0m Log file: journal_results/journal_experiments_20260331_001735/exp_1/experiment.log

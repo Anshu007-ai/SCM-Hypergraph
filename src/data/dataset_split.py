@@ -121,19 +121,19 @@ def temporal_split(
     print("=" * 80)
     print("TEMPORAL DATA SPLIT - PREVENTING LEAKAGE")
     print("=" * 80)
-    print(f"📊 Total snapshots: {total_snapshots:,}")
-    print(f"⏰ Gap between splits: {gap_hours} hours")
+    print(f"[DATA] Total snapshots: {total_snapshots:,}")
+    print(f"[TIME] Gap between splits: {gap_hours} hours")
     print()
-    print(f"🚆 TRAIN:  indices [0:{train_end_idx}] = {len(train_snaps):,} snapshots ({len(train_snaps)/total_snapshots*100:.1f}%)")
+    print(f"[TRAIN] TRAIN:  indices [0:{train_end_idx}] = {len(train_snaps):,} snapshots ({len(train_snaps)/total_snapshots*100:.1f}%)")
     print(f"          Covers ~months 1-{int(train_end_idx/hours_per_month)}")
     print()
-    print(f"🔧 VAL:    indices [{val_start_idx}:{val_end_idx}] = {len(val_snaps):,} snapshots ({len(val_snaps)/total_snapshots*100:.1f}%)")
+    print(f"[VAL] VAL:    indices [{val_start_idx}:{val_end_idx}] = {len(val_snaps):,} snapshots ({len(val_snaps)/total_snapshots*100:.1f}%)")
     print(f"          Covers ~months {int(val_start_idx/hours_per_month)+1}-{int(val_end_idx/hours_per_month)}")
     print()
-    print(f"🧪 TEST:   indices [{test_start_idx}:{total_snapshots}] = {len(test_snaps):,} snapshots ({len(test_snaps)/total_snapshots*100:.1f}%)")
+    print(f"[TEST] TEST:   indices [{test_start_idx}:{total_snapshots}] = {len(test_snaps):,} snapshots ({len(test_snaps)/total_snapshots*100:.1f}%)")
     print(f"          Covers ~months {int(test_start_idx/hours_per_month)+1}-12")
     print()
-    print(f"✅ NO LEAKAGE: {gap_hours}h gaps prevent crisis buildup bleeding between sets")
+    print(f"[OK] NO LEAKAGE: {gap_hours}h gaps prevent crisis buildup bleeding between sets")
     print("=" * 80)
 
     return (train_snaps, train_labels), (val_snaps, val_labels), (test_snaps, test_labels)
@@ -224,8 +224,8 @@ def create_hard_test_set(
     print("=" * 80)
     print("HARD TEST SET CREATION")
     print("=" * 80)
-    print(f"📈 Found {n_hard_total:,} HARD samples (criticality transitions)")
-    print(f"📊 Found {n_easy_total:,} EASY samples (stable states)")
+    print(f"[STATS] Found {n_hard_total:,} HARD samples (criticality transitions)")
+    print(f"[DATA] Found {n_easy_total:,} EASY samples (stable states)")
     print()
 
     # Calculate target sizes
@@ -263,11 +263,11 @@ def create_hard_test_set(
         "easy_available": n_easy_total
     }
 
-    print(f"🎯 TARGET: {hard_target} hard + {easy_target} easy = {hard_target + easy_target} total")
-    print(f"✅ ACTUAL: {stats['hard_samples']} hard + {stats['easy_samples']} easy = {stats['total_samples']} total")
-    print(f"📊 RATIO:  {stats['hard_ratio_actual']:.1%} hard, {stats['easy_ratio_actual']:.1%} easy")
+    print(f"[TARGET] TARGET: {hard_target} hard + {easy_target} easy = {hard_target + easy_target} total")
+    print(f"[OK] ACTUAL: {stats['hard_samples']} hard + {stats['easy_samples']} easy = {stats['total_samples']} total")
+    print(f"[DATA] RATIO:  {stats['hard_ratio_actual']:.1%} hard, {stats['easy_ratio_actual']:.1%} easy")
     print()
-    print("🧠 This challenging test set will reveal if the model can:")
+    print("[BRAIN] This challenging test set will reveal if the model can:")
     print("   • Predict crisis transitions (hard samples)")
     print("   • Maintain stability predictions (easy samples)")
     print("=" * 80)
@@ -399,9 +399,9 @@ if __name__ == "__main__":
     print("HT-HGNN Data Leakage Prevention")
     print("=" * 80)
     print()
-    print("🎯 Purpose: Replace random train_test_split with temporal splits")
+    print("[TARGET] Purpose: Replace random train_test_split with temporal splits")
     print("📅 Dataset: IndiGo Aviation 2025 (84 nodes, 18 hyperedges, ~8640 snapshots)")
-    print("⏰ Method:  Strict chronological order with 72-hour gaps")
+    print("[TIME] Method:  Strict chronological order with 72-hour gaps")
     print()
     print("Functions:")
     print("  • temporal_split() - Main temporal splitting function")
@@ -418,7 +418,7 @@ if __name__ == "__main__":
     print()
 
     # Demo with synthetic data
-    print("🧪 DEMO: Synthetic 12-month hourly dataset")
+    print("[TEST] DEMO: Synthetic 12-month hourly dataset")
     np.random.seed(42)
 
     # Create synthetic temporal data (8640 snapshots = 12 months * 720 hours)
@@ -447,15 +447,15 @@ if __name__ == "__main__":
                 labels[t, node] = labels[t-1, node]  # Stay same
 
     # Test temporal split
-    print("\n📊 Running temporal_split()...")
+    print("\n[DATA] Running temporal_split()...")
     train_data, val_data, test_data = temporal_split(snapshots, labels)
 
     # Test hard test set
-    print("\n🎯 Running create_hard_test_set()...")
+    print("\n[TARGET] Running create_hard_test_set()...")
     test_snaps, test_labels = test_data
     hard_snaps, hard_labels, stats = create_hard_test_set(test_snaps, test_labels)
 
-    print(f"\n✅ Demo completed successfully!")
+    print(f"\n[OK] Demo completed successfully!")
     print(f"   Train: {len(train_data[0]):,} snapshots")
     print(f"   Val:   {len(val_data[0]):,} snapshots")
     print(f"   Test:  {len(test_data[0]):,} snapshots")

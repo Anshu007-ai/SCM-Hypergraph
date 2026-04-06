@@ -140,6 +140,135 @@ DATASET_REGISTRY: Dict[str, bool] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Risk label generation (for criticality task)
+# ---------------------------------------------------------------------------
+try:
+    from src.hypergraph.risk_labels import RiskLabelGenerator
+    HAS_RISK_GEN = True
+except ImportError:
+    HAS_RISK_GEN = False
+
+
+RISK_LEVEL_MAP = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
+
+def get_data_and_config(data_dir="Data set"):
+    """
+    Loads data and extracts configuration needed for model initialization.
+    This is a self-contained function to ensure the figure generation script
+    is independent of the training script's data processing.
+    """
+    print("Loading DataCo dataset for configuration and evaluation...")
+    if not HAS_DATACO:
+        raise ImportError("DataCoLoader is not available for validation.")
+        
+    loader = DataCoLoader(data_dir=data_dir)
+    raw_data = loader.build_hypergraph()
+
+    # Generate risk labels on the fly
+    print("Generating risk labels...")
+    if not HAS_RISK_GEN:
+        raise ImportError("RiskLabelGenerator is not available for validation.")
+
+    risk_gen = RiskLabelGenerator(raw_data['hypergraph'])
+    labels_df = risk_gen.generate_all_labels()
+
+    num_nodes = raw_data['node_features'].shape[0]
+    node_labels_numeric = np.zeros(num_nodes, dtype=int)
+    node_id_to_idx = {node.node_id: i for i, node in enumerate(raw_data['hypergraph'].nodes.values())}
+
+    for _, row in labels_df.iterrows():
+        he_id = row['hyperedge_id']
+        risk_level_str = row['risk_level']
+        risk_level_numeric = RISK_LEVEL_MAP.get(risk_level_str, 0)
+        
+        if he_id in raw_data['hypergraph'].hyperedges:
+            member_nodes = raw_data['hypergraph'].hyperedges[he_id].nodes
+            for node_id in member_nodes:
+                if node_id in node_id_to_idx:
+                    node_idx = node_id_to_idx[node_id]
+                    # Use max risk level for a node involved in multiple hyperedges
+                    if risk_level_numeric > node_labels_numeric[node_idx]:
+                        node_labels_numeric[node_idx] = risk_level_numeric
+
+    # Map [0,1,2,3,4] to [0,0,1,2,3] for 4-class classification
+    final_node_labels = np.select(
+        [node_labels_numeric <= 1, node_labels_numeric == 2, node_labels_numeric == 3, node_labels_numeric == 4],
+        [0, 1, 2, 3],
+        default=0
+    )
+    raw_data['criticality_labels'] = final_node_labels
+
+    # Use the adapter to get the final processed data and config
+    if not HAS_DATA_ADAPTER:
+        raise ImportError("DataAdapter is not available for validation.")
+        
+    adapter = DataAdapter()
+    data = adapter.transform(raw_data)
+    data['criticality_labels'] = final_node_labels # Ensure labels are in the final dict
+
+    # Extract config needed for model initialization
+    model_config = {
+        'node_types': data['node_types'],
+        'edge_types': data['edge_types'],
+        'in_channels': data['node_features'].shape[1],
+        'num_hgt_heads': 4,
+        'num_hgnn_layers': 2,
+        'use_spectral_conv': True,
+        'time_window': 10,
+        'num_nodes': len(data['node_types']),
+        'num_hyperedges': data['incidence_matrix'].shape[0]
+    }
+    
+    # For evaluation, we use all data
+    indices = np.arange(len(final_node_labels))
+    
+    # Temporal split for validation
+    timestamps = data.get('timestamps')
+    if timestamps is not None and len(timestamps) > 0:
+        # Ensure timestamps is a 1D array of numbers
+        if isinstance(timestamps[0], (list, np.ndarray)):
+            timestamps = [ts[0] for ts in timestamps]
+        
+        timestamps = np.array(timestamps)
+        
+        # Find a split point, e.g., 80th percentile of time
+        split_timestamp = np.quantile(timestamps, 0.8)
+        
+        train_indices = np.where(timestamps <= split_timestamp)[0]
+        test_indices = np.where(timestamps > split_timestamp)[0]
+
+        # Check if splits are valid
+        if len(train_indices) == 0 or len(test_indices) == 0:
+            print("Warning: Temporal split resulted in empty train or test set. Using random split.")
+            from sklearn.model_selection import train_test_split
+            train_indices, test_indices = train_test_split(indices, test_size=0.2, random_state=42, stratify=final_node_labels)
+    else:
+        print("No timestamps found, using random split.")
+        from sklearn.model_selection import train_test_split
+        train_indices, test_indices = train_test_split(indices, test_size=0.2, random_state=42, stratify=final_node_labels)
+
+    
+    train_data = {
+        'node_features': data['node_features'][train_indices],
+        'labels': final_node_labels[train_indices],
+        'indices': train_indices
+    }
+    test_data = {
+        'node_features': data['node_features'][test_indices],
+        'labels': final_node_labels[test_indices],
+        'indices': test_indices
+    }
+    
+    # The 'snaps' should contain the full data for graph structure
+    snaps = {
+        'node_features': data['node_features'],
+        'incidence_matrix': data['incidence_matrix']
+    }
+
+    return (snaps, train_data, test_data), model_config, data
+
+
 # ===================================================================
 # CLI argument parser
 # ===================================================================
@@ -169,13 +298,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--lr",
         type=float,
         default=0.001,
-        help="Learning rate (default: 0.001).",
+        help="Learning rate for the optimizer (default: 0.001).",
     )
     parser.add_argument(
         "--hidden-dim",
         type=int,
-        default=128,
-        help="Hidden dimension size (default: 128).",
+        default=64,
+        help="Hidden dimension size for the model (default: 64).",
     )
     parser.add_argument(
         "--batch-size",
@@ -226,6 +355,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="WebSocket server URL for live broadcast (optional).",
+    )
+    parser.add_argument(
+        "--run-hypershap",
+        action="store_true",
+        help="Run HyperSHAP analysis on the trained model.",
     )
 
     return parser
@@ -414,7 +548,12 @@ def prepare_tensors(
     for the HT-HGNN forward pass.
     """
     node_features = np.asarray(standardised["node_features"], dtype=np.float32)
-    incidence_matrix = np.asarray(standardised["incidence_matrix"], dtype=np.float32)
+    # If the incidence matrix is already a sparse tensor, just move it to device.
+    # Otherwise, convert dense numpy to tensor.
+    incidence_matrix = standardised["incidence_matrix"]
+    if isinstance(incidence_matrix, np.ndarray):
+        incidence_matrix = torch.tensor(incidence_matrix, dtype=torch.float32)
+
 
     n_nodes = node_features.shape[0]
     n_features = node_features.shape[1]
@@ -430,12 +569,19 @@ def prepare_tensors(
     X_std = X.std(dim=0) + 1e-8
     X = (X - X_mean) / X_std
 
-    # Incidence tensor -- the model expects (E, N) = (hyperedges, nodes)
-    H = torch.FloatTensor(incidence_matrix).to(device)  # (N, M)
-    H_model = H.t()  # (M, N) for v1.0 model convention
+    # Incidence tensor -- now a sparse tensor from the adapter
+    H = standardised["incidence_matrix"].to(device) # This is (N, M)
+
+    # The v1.0 model expects (M, N) in its forward pass.
+    # The adapter now returns (N, M), so we don't need to transpose here for the v2 model,
+    # but the v1 model's HypergraphConvolution layer will transpose it back.
+    # Let's pass both formats for compatibility.
+    H_model_format = H.t() # (M, N) for v1.0 model
 
     # Edge index from incidence (for the HGT layer)
-    edges_n, edges_e = torch.nonzero(H, as_tuple=True)
+    # We need to get indices from the sparse tensor
+    h_indices = H.coalesce().indices()
+    edges_n, edges_e = h_indices[0, :], h_indices[1, :]
     edge_index = torch.stack([edges_e, edges_n]).to(device)  # (2, num_edges)
 
     # Assign edge types cyclically from the unique edge types present
@@ -469,14 +615,20 @@ def prepare_tensors(
     ts_raw = standardised.get("timestamps", None)
     if ts_raw is not None and len(ts_raw) > 0:
         ts_arr = np.array(ts_raw, dtype=np.float32)
-        # Expand per-hyperedge timestamps to per-node via incidence
         node_ts = np.zeros(n_nodes, dtype=np.float32)
         count = np.zeros(n_nodes, dtype=np.float32)
-        for e_idx in range(len(ts_arr)):
-            members = np.where(incidence_matrix[:, e_idx] > 0)[0]
-            for ni in members:
-                node_ts[ni] += ts_arr[e_idx]
-                count[ni] += 1
+        
+        # Correctly iterate over sparse incidence matrix
+        h_indices = H.coalesce().indices()
+        node_indices, edge_indices = h_indices[0, :], h_indices[1, :]
+        
+        for i in range(len(node_indices)):
+            node_idx = node_indices[i].item()
+            edge_idx = edge_indices[i].item()
+            if edge_idx < len(ts_arr):
+                node_ts[node_idx] += ts_arr[edge_idx]
+                count[node_idx] += 1
+        
         count[count == 0] = 1.0
         node_ts /= count
         timestamps = torch.FloatTensor(node_ts).to(device)
@@ -484,22 +636,35 @@ def prepare_tensors(
         timestamps = torch.linspace(0, 10, n_nodes).to(device)
 
     # Target labels (generated from features as proxies when ground truth
-    # is unavailable -- same approach as v1.0)
+    # is unavailable -- this is now corrected to use real labels if available)
     y_price = torch.FloatTensor(
-        np.random.RandomState(42).normal(100, 20, n_nodes).astype(np.float32)
+        standardised.get("price_labels", np.random.RandomState(42).normal(100, 20, n_nodes))
     ).to(device)
     y_change = torch.FloatTensor(
-        np.random.RandomState(43).uniform(-0.1, 0.1, n_nodes).astype(np.float32)
+        standardised.get("change_labels", np.random.RandomState(43).uniform(-0.1, 0.1, n_nodes))
     ).to(device)
-    # Criticality from feature magnitudes
-    feat_magnitude = np.linalg.norm(node_features, axis=1)
-    feat_magnitude = feat_magnitude / (feat_magnitude.max() + 1e-8)
-    y_criticality = torch.FloatTensor(feat_magnitude.astype(np.float32)).to(device)
+
+    # Criticality labels with proper integer encoding for CrossEntropyLoss
+    raw_crit_labels = standardised.get("criticality_labels", None)
+    if raw_crit_labels is not None:
+        # Mapping from string labels to integers
+        label_map = {'Low': 0, 'Medium': 1, 'High': 2, 'Critical': 3}
+        # Default to 'Low' if a label is not in the map
+        y_criticality = torch.LongTensor([label_map.get(str(l), 0) for l in raw_crit_labels]).to(device)
+    else:
+        # Fallback to old proxy method if no labels are present
+        feat_magnitude = np.linalg.norm(node_features, axis=1)
+        feat_magnitude = feat_magnitude / (feat_magnitude.max() + 1e-8)
+        # This is not ideal for classification, but maintains fallback behavior.
+        # The model now expects integer labels, so we'll create some.
+        y_criticality = torch.LongTensor((feat_magnitude * 3).astype(int)).to(device)
+
 
     # Cascade targets: proxy based on connectivity
-    connectivity = incidence_matrix.sum(axis=1).astype(np.float32)
-    connectivity = connectivity / (connectivity.max() + 1e-8)
-    y_cascade = torch.FloatTensor(connectivity).to(device)
+    connectivity_tensor = H.to_dense().sum(axis=1)
+    connectivity_numpy = connectivity_tensor.cpu().numpy()
+    connectivity_numpy = connectivity_numpy / (connectivity_numpy.max() + 1e-8)
+    y_cascade = torch.FloatTensor(connectivity_numpy).to(device)
 
     # Hyperedge weights
     hw = standardised.get("hyperedge_weights", None)
@@ -510,8 +675,8 @@ def prepare_tensors(
 
     return {
         "X": X,
-        "incidence_matrix": H_model,           # (M, N) for v1.0 model
-        "incidence_matrix_NM": H,               # (N, M) for v2.0 spectral
+        "incidence_matrix": H, # Pass the sparse (N, M) tensor
+        "incidence_matrix_NM": H,
         "edge_index": edge_index,
         "node_types": node_types_mapped,
         "edge_types": assigned_edge_types,
@@ -580,10 +745,15 @@ class HT_HGNN_Trainer:
         # Training history
         self.history: Dict[str, List[float]] = {
             "loss": [],
+            "val_loss": [],
             "loss_price": [],
+            "val_loss_price": [],
             "loss_change": [],
+            "val_loss_change": [],
             "loss_criticality": [],
+            "val_loss_criticality": [],
             "loss_cascade": [],
+            "val_loss_cascade": [],
             "learning_rates": [],
         }
 
@@ -676,7 +846,7 @@ class HT_HGNN_Trainer:
             price_target=data["y_price"],
             change_pred=output["change_pred"],
             change_target=data["y_change"],
-            criticality_pred=output["criticality"],
+            criticality_pred=output["criticality_logits"], # Pass logits to CE loss
             criticality_target=data["y_criticality"],
         )
 

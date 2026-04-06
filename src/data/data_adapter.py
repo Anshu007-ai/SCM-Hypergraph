@@ -16,6 +16,7 @@ Standardized output format:
 
 import numpy as np
 import pandas as pd
+import torch
 from typing import Dict, List, Optional, Any, Union
 
 
@@ -113,12 +114,13 @@ class DataAdapter:
             node_features = self._normalize_features(node_features, source)
 
         # --- Build incidence matrix ---
-        incidence_matrix = self._to_numpy(loader_output['incidence_matrix'])
+        # Convert to a sparse tensor to save memory
+        incidence_matrix = self._to_sparse_coo(loader_output['incidence_matrix'], 
+                                               n_nodes=node_features.shape[0])
 
         # Ensure incidence is (N, M): rows = nodes, cols = hyperedges
-        n_nodes = node_features.shape[0]
-        if incidence_matrix.shape[0] != n_nodes and incidence_matrix.shape[1] == n_nodes:
-            incidence_matrix = incidence_matrix.T
+        if incidence_matrix.shape[0] != node_features.shape[0]:
+             incidence_matrix = incidence_matrix.t()
 
         # --- Node and edge types ---
         node_types = list(loader_output['node_types'])
@@ -148,7 +150,7 @@ class DataAdapter:
 
         result = {
             'node_features': node_features.astype(np.float32),
-            'incidence_matrix': incidence_matrix.astype(np.float32),
+            'incidence_matrix': incidence_matrix, # This is now a sparse tensor
             'timestamps': timestamps,
             'node_types': node_types,
             'edge_types': edge_types,
@@ -210,6 +212,42 @@ class DataAdapter:
             return data.astype(np.float64)
         return np.asarray(data, dtype=np.float64)
 
+    @staticmethod
+    def _to_sparse_coo(data, n_nodes: int) -> torch.Tensor:
+        """Convert various formats to a sparse PyTorch COO tensor."""
+        if isinstance(data, torch.Tensor) and data.is_sparse:
+            return data.coalesce()
+
+        # Handle dense numpy array or pandas DataFrame
+        if isinstance(data, (np.ndarray, pd.DataFrame)):
+            if isinstance(data, pd.DataFrame):
+                data = data.values
+            
+            if data.ndim == 2:
+                if data.shape[0] != n_nodes and data.shape[1] == n_nodes:
+                    data = data.T
+                
+                sp_matrix = torch.from_numpy(data).to_sparse().float()
+                return sp_matrix.coalesce()
+
+        # Handle COO-like list of lists: [[node_indices], [hyperedge_indices]]
+        if isinstance(data, (list, tuple)) and len(data) == 2:
+            row_indices, col_indices = data
+            if not row_indices or not col_indices:
+                # Handle empty case
+                return torch.sparse_coo_tensor(size=(n_nodes, 0)).float()
+
+            indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
+            values = torch.ones(len(row_indices), dtype=torch.float32)
+            
+            n_edges = max(col_indices) + 1 if col_indices else 0
+            
+            return torch.sparse_coo_tensor(
+                indices, values, size=(n_nodes, n_edges)
+            ).coalesce()
+            
+        raise ValueError(f"Unsupported format for sparse conversion: {type(data)}")
+
     def _normalize_features(self, features: np.ndarray, source: str) -> np.ndarray:
         """
         Min-max normalize features to self.feature_range.
@@ -248,36 +286,42 @@ class DataAdapter:
         if missing:
             raise ValueError(
                 f"Loader output is missing required keys: {missing}. "
-                f"Expected keys: {self.REQUIRED_KEYS}"
+                f"Available keys: {list(loader_output.keys())}"
             )
 
-    @staticmethod
-    def _validate_output(result: Dict) -> None:
-        """Run basic consistency checks on the standardized output."""
-        nf = result['node_features']
-        im = result['incidence_matrix']
-        n_nodes = nf.shape[0]
-        n_edges = im.shape[1]
+    def _validate_output(self, standardized: Dict) -> None:
+        """Validate the structure and dimensions of the standardized output dict."""
+        # Check for presence of essential keys
+        for key in ['node_features', 'incidence_matrix', 'node_types', 'edge_types']:
+            if key not in standardized:
+                raise ValueError(f"Standardized output is missing required key: {key}")
 
-        if im.shape[0] != n_nodes:
-            raise ValueError(
-                f"Incidence matrix rows ({im.shape[0]}) must equal number of "
-                f"nodes ({n_nodes})."
+        # Check for sparse incidence matrix
+        if not isinstance(standardized['incidence_matrix'], torch.Tensor) or not standardized['incidence_matrix'].is_sparse:
+            raise TypeError(
+                "Incidence matrix must be a sparse torch.Tensor, but got "
+                f"{type(standardized['incidence_matrix'])}"
             )
-        if len(result['node_types']) != n_nodes:
+
+        n_nodes = standardized['node_features'].shape[0]
+        n_hyperedges = standardized['incidence_matrix'].shape[1]
+
+        # Validate dimensions
+        if len(standardized['node_types']) != n_nodes:
             raise ValueError(
-                f"node_types length ({len(result['node_types'])}) must match "
-                f"number of nodes ({n_nodes})."
+                f"Mismatch: {len(standardized['node_types'])} node types for {n_nodes} nodes."
             )
-        if len(result['edge_types']) != n_edges:
+        if len(standardized['edge_types']) != n_hyperedges:
             raise ValueError(
-                f"edge_types length ({len(result['edge_types'])}) must match "
-                f"number of hyperedges ({n_edges})."
+                f"Mismatch: {len(standardized['edge_types'])} edge types for {n_hyperedges} hyperedges."
             )
-        if result['hyperedge_weights'].shape[0] != n_edges:
+        if standardized.get('hyperedge_weights') is not None and len(standardized['hyperedge_weights']) != n_hyperedges:
             raise ValueError(
-                f"hyperedge_weights length ({result['hyperedge_weights'].shape[0]}) "
-                f"must match number of hyperedges ({n_edges})."
+                f"Mismatch: {len(standardized['hyperedge_weights'])} hyperedge weights for {n_hyperedges} hyperedges."
+            )
+        if standardized.get('timestamps') is not None and len(standardized['timestamps']) != n_hyperedges:
+            raise ValueError(
+                f"Mismatch: {len(standardized['timestamps'])} timestamps for {n_hyperedges} hyperedges."
             )
 
     @staticmethod

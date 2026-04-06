@@ -25,6 +25,7 @@ class HypergraphNode:
     reliability: float
     substitutability: float
     cost: float
+    raw_data_idx: int = 0
 
 
 @dataclass

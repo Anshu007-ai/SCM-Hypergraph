@@ -20,6 +20,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
+import torch
 
 import sys
 import os
@@ -73,18 +74,58 @@ class DataCoLoader:
         'Order Item Quantity',
     ]
 
-    def __init__(self, data_dir: str = "Data set"):
+    def __init__(self, data_dir: str = "Data set", use_synthetic: bool = False):
         """
         Initialize the DataCo loader.
 
         Args:
             data_dir: Root path to the ``Data set`` folder that contains
                       ``DataCo/DataCoSupplyChainDataset.csv``.
+            use_synthetic: If True, force generation of synthetic data
+                           even if the CSV exists.
         """
         self.data_dir = Path(data_dir).resolve()
-        self.csv_path = self.data_dir / "DataCo" / "DataCoSupplyChainDataset.csv"
+        self.file_path = self.data_dir / "DataCo" / "DataCoSupplyChainDataset.csv"
+        self.csv_path = self.file_path # For compatibility
         self.df: Optional[pd.DataFrame] = None
         self._loaded = False
+        self.is_synthetic = False
+
+        if self.file_path.exists() and not use_synthetic:
+            print(f"INFO: Found DataCo CSV at: {self.file_path}")
+            self.df = self.load()
+        else:
+            print(f"WARNING: DataCo CSV not found at {self.file_path} or synthetic forced.")
+            print("Generating synthetic data as a fallback.")
+            self.df = self.generate_synthetic_data()
+            self.is_synthetic = True
+
+    def generate_synthetic_data(self, num_rows=1000) -> pd.DataFrame:
+        """Generates a synthetic DataFrame with the same schema."""
+        print("Generating synthetic DataCo data...")
+        data = {
+            'Late_delivery_risk': np.random.randint(0, 2, size=num_rows),
+            'Order_Item_Profit_Ratio': np.random.uniform(-0.5, 0.5, size=num_rows),
+            'Shipping Mode': np.random.choice(['Standard Class', 'First Class', 'Second Class', 'Same Day'], size=num_rows),
+            'Customer Segment': np.random.choice(['Consumer', 'Corporate', 'Home Office'], size=num_rows),
+            'Order Country': np.random.choice(['USA', 'Mexico', 'Brazil', 'Germany', 'Australia'], size=num_rows),
+            'Order Region': np.random.choice(['South', 'North', 'West', 'East', 'Central'], size=num_rows),
+            'Category Name': np.random.choice(['Fishing', 'Camping', 'Fitness', 'Golf', 'Apparel'], size=num_rows),
+            'order date (DateOrders)': [datetime.now() - timedelta(days=np.random.randint(1, 365)) for _ in range(num_rows)],
+            'Days for shipping (real)': np.random.randint(1, 10, size=num_rows),
+            'Days for shipment (scheduled)': np.random.randint(1, 10, size=num_rows),
+            'Benefit per order': np.random.uniform(10, 100, size=num_rows),
+            'Sales per customer': np.random.uniform(100, 1000, size=num_rows),
+            'Order Item Discount': np.random.uniform(0, 50, size=num_rows),
+            'Order Item Quantity': np.random.randint(1, 5, size=num_rows),
+            'Order Item Total': np.random.uniform(100, 2000, size=num_rows),
+            'Order Profit Per Order': np.random.uniform(-50, 150, size=num_rows),
+        }
+        df = pd.DataFrame(data)
+        # Add a unique ID for each row to act as a node identifier
+        df['Order Id'] = range(num_rows)
+        return df
+
 
     # ------------------------------------------------------------------
     # Loading
@@ -157,7 +198,7 @@ class DataCoLoader:
 
                 {
                     'node_features':     np.ndarray (N, 8),
-                    'incidence_matrix':  np.ndarray (N, M),
+                    'incidence_matrix':  torch.sparse_coo_tensor (N, M),
                     'timestamps':        list[float] length M,
                     'node_types':        list[str]   length N,
                     'edge_types':        list[str]   length M,
@@ -166,7 +207,7 @@ class DataCoLoader:
                     'hypergraph':        Hypergraph object,
                 }
         """
-        if not self._loaded:
+        if not self._loaded or (max_rows and max_rows != len(self.df)):
             self.load(max_rows=max_rows)
 
         df = self.df.copy()
@@ -206,7 +247,8 @@ class DataCoLoader:
         groups = df.groupby('_group_key')
 
         hypergraph = Hypergraph()
-        incidence_rows: List[np.ndarray] = []  # each is a binary column (N,)
+        row_indices: List[int] = []
+        col_indices: List[int] = []
         edge_types: List[str] = []
         timestamps: List[float] = []
         hyperedge_weights: List[float] = []
@@ -224,6 +266,7 @@ class DataCoLoader:
                 reliability=1.0 - float(node_features[idx, 0]) if node_features.shape[1] > 0 else 0.8,
                 substitutability=0.5,
                 cost=float(node_features[idx, 4]) if node_features.shape[1] > 4 else 0.0,
+                raw_data_idx=idx  # This was the missing attribute
             )
             hypergraph.add_node(node)
 
@@ -250,13 +293,13 @@ class DataCoLoader:
             weight = 1.0 + avg_risk if avg_risk >= risk_threshold else 1.0
 
             he_id = f"HE_DCO_{he_counter:05d}"
-            he_counter += 1
 
-            # Incidence column
-            col = np.zeros(n_nodes, dtype=np.float32)
-            for mi in member_indices:
-                col[mi] = 1.0
-            incidence_rows.append(col)
+            # Populate sparse indices
+            for member_idx in member_indices:
+                row_indices.append(member_idx)
+                col_indices.append(he_counter)
+
+            he_counter += 1
 
             edge_types.append(etype)
             timestamps.append(float(ts_val))
@@ -273,11 +316,19 @@ class DataCoLoader:
             )
             hypergraph.add_hyperedge(he)
 
-        # --- Assemble incidence matrix (N x M) ---
-        if incidence_rows:
-            incidence_matrix = np.column_stack(incidence_rows)
+        # --- Assemble sparse incidence matrix (N x M) ---
+        if he_counter > 0:
+            indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
+            values = torch.ones(len(row_indices), dtype=torch.float32)
+            incidence_matrix = torch.sparse_coo_tensor(
+                indices, values, size=(n_nodes, he_counter)
+            ).coalesce()
         else:
-            incidence_matrix = np.zeros((n_nodes, 1), dtype=np.float32)
+            incidence_matrix = torch.sparse_coo_tensor(
+                torch.empty((2, 0), dtype=torch.long),
+                torch.empty(0, dtype=torch.float32),
+                (n_nodes, 0)
+            )
             edge_types = ['empty']
             timestamps = [0.0]
             hyperedge_weights = [0.0]
@@ -325,11 +376,15 @@ class DataCoLoader:
                 break
 
         if date_col is not None:
-            df['_parsed_date'] = pd.to_datetime(df[date_col], errors='coerce')
+            # Ensure we handle potential timezone issues by making it timezone-naive
+            parsed_dates = pd.to_datetime(df[date_col], errors='coerce').dt.tz_localize(None)
+            df = df.assign(_parsed_date=parsed_dates).dropna(subset=['_parsed_date'])
+            
             min_date = df['_parsed_date'].min()
-            df['_time_bucket'] = (
-                (df['_parsed_date'] - min_date).dt.days // window_days
-            ).fillna(0).astype(int)
+            
+            # Perform calculation on the Series directly to avoid alignment issues
+            time_delta_days = (df['_parsed_date'] - min_date).dt.days
+            df['_time_bucket'] = (time_delta_days // window_days).fillna(0).astype(int)
         else:
             # Fallback: assign all to bucket 0
             df['_time_bucket'] = 0

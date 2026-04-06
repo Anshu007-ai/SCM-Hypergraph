@@ -68,7 +68,7 @@ class HypergraphConvolution(MessagePassing):
             nn.init.ones_(self.edge_attention)
     
     def forward(self, node_features: torch.Tensor, 
-                incidence_matrix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+                incidence_matrix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             node_features: (num_nodes, in_channels)
@@ -80,7 +80,9 @@ class HypergraphConvolution(MessagePassing):
             attention_weights: Attention scores (for entropy analysis)
         """
         # Step 1: Node → Hyperedge (aggregation)
-        hyperedge_features = torch.matmul(incidence_matrix, node_features)  # (E, D)
+        # Use sparse matrix multiplication: H.t() @ X
+        # H is (N, E), so H.t() is (E, N). X is (N, D). Result is (E, D).
+        hyperedge_features = torch.sparse.mm(incidence_matrix.t(), node_features)
         hyperedge_features = self.node_to_edge(hyperedge_features)  # (E, out_D)
         
         # Step 2: Apply attention to hyperedges
@@ -91,7 +93,9 @@ class HypergraphConvolution(MessagePassing):
             attention = torch.ones(self.num_hyperedges, device=node_features.device)
         
         # Step 3: Hyperedge → Node (propagation)
-        node_out = torch.matmul(incidence_matrix.t(), hyperedge_features)  # (N, out_D)
+        # Use sparse matrix multiplication: H @ HE
+        # H is (N, E), HE is (E, out_D). Result is (N, out_D).
+        node_out = torch.sparse.mm(incidence_matrix, hyperedge_features)
         node_out = self.edge_to_node(node_out)  # (N, out_D)
         
         # Residual connection
@@ -144,23 +148,27 @@ class HeterogenousGraphTransformer(nn.Module):
         # Attention mechanism for multi-head fusion
         # Each transformer outputs: (num_nodes, num_heads * (out_channels // num_heads)) = (num_nodes, out_channels)
         # So concatenating 3 edge types gives (num_nodes, 3 * out_channels)
-        self.attention_fusion = nn.Linear(len(self.edge_types) * out_channels, out_channels)
-        
+        self.attention_fusion = nn.Linear(
+            out_channels * len(edge_types), out_channels
+        ) if len(edge_types) > 1 else nn.Identity()
+
         self.reset_parameters()
-    
+
     def reset_parameters(self):
-        for module in self.type_embedding.values():
-            module.reset_parameters()
-        for module in self.transformer_layers.values():
-            module.reset_parameters()
-        self.attention_fusion.reset_parameters()
-    
-    def forward(self, node_features: torch.Tensor, node_types: List[str],
-                edge_index: torch.Tensor, edge_types: List[str]) -> torch.Tensor:
+        for emb in self.type_embedding.values():
+            emb.reset_parameters()
+        for conv in self.transformer_layers.values():
+            conv.reset_parameters()
+        if isinstance(self.attention_fusion, nn.Linear):
+            self.attention_fusion.reset_parameters()
+
+    def forward(self, node_features: torch.Tensor, 
+                edge_index: torch.Tensor,
+                node_types: List[str],
+                edge_types: List[str]) -> torch.Tensor:
         """
         Args:
             node_features: (num_nodes, in_channels)
-            node_types: Type label for each node
             edge_index: (2, num_edges)
             edge_types: Type label for each edge
         
@@ -245,7 +253,7 @@ class TemporalGraphNetwork(nn.Module):
     
     def reset_parameters(self):
         self.gru_cell.reset_parameters()
-        self.temporal_attention.reset_parameters()
+        nn.init.xavier_uniform_(self.temporal_attention.weight)
         self.projection.reset_parameters()
     
     def forward(self, node_features: torch.Tensor, 
@@ -290,6 +298,48 @@ class TemporalGraphNetwork(nn.Module):
         return temporal_embeddings, cascade_scores
 
 
+class SpectralHypergraphConv(nn.Module):
+    """
+    Spectral Hypergraph Convolution
+    """
+    def __init__(self, in_channels, out_channels, num_layers):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_layers = num_layers
+        
+        # Hypergraph adjacency matrix
+        self.A = nn.Parameter(torch.randn(num_layers, in_channels, out_channels))
+        
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        pass
+    
+    def forward(self, x, incidence_matrix):
+        """
+        Args:
+            x: (num_nodes, in_channels)
+            incidence_matrix: (num_hyperedges, num_nodes) binary matrix
+        
+        Returns:
+            output: (num_nodes, out_channels)
+        """
+        # Step 1: Hypergraph convolution
+        # Use spectral decomposition
+        # A is (num_layers, in_channels, out_channels)
+        # We want to compute A @ X
+        # X is (num_nodes, in_channels)
+        # Result is (num_nodes, out_channels)
+        output = torch.zeros(x.size(0), self.out_channels, device=x.device)
+        
+        for i in range(self.num_layers):
+            # Compute X @ A
+            output += torch.mm(x, self.A[i])
+        
+        return output
+
+
 class HeterogeneousTemporalHypergraphNN(nn.Module):
     """
     Complete HT-HGNN Model combining all three components
@@ -312,11 +362,12 @@ class HeterogeneousTemporalHypergraphNN(nn.Module):
                  out_channels: int,
                  num_nodes: int,
                  num_hyperedges: int,
-                 node_types: List[str] = None,
-                 edge_types: List[str] = None,
+                 node_types: list,
+                 edge_types: list,
                  num_hgnn_layers: int = 2,
                  num_hgt_heads: int = 4,
-                 time_window: int = 10):
+                 time_window: int = 10,
+                 use_spectral_conv: bool = True):
         super().__init__()
         
         self.in_channels = in_channels
@@ -324,115 +375,122 @@ class HeterogeneousTemporalHypergraphNN(nn.Module):
         self.out_channels = out_channels
         self.num_nodes = num_nodes
         self.num_hyperedges = num_hyperedges
-        
-        # Layer 1: Hypergraph Neural Network (HGNN+)
-        self.hgnn_layers = nn.ModuleList([
-            HypergraphConvolution(
-                in_channels if i == 0 else hidden_channels,
-                hidden_channels,
-                num_nodes,
-                num_hyperedges,
-                use_attention=True
+        self.num_hgt_heads = num_hgt_heads
+        self.time_window = time_window
+        self.use_spectral_conv = use_spectral_conv
+
+        # 1. Hypergraph Convolution Layers
+        self.hgnn_layers = None
+        self.hypergraph_conv = None
+        if use_spectral_conv:
+            # v2.0 Spectral Convolution
+            self.hypergraph_conv = SpectralHypergraphConv(
+                in_channels, hidden_channels, num_hgnn_layers
             )
-            for i in range(num_hgnn_layers)
-        ])
+        else:
+            # v1.0 HGNN+ Convolution
+            self.hgnn_layers = nn.ModuleList([
+                HypergraphConvolution(
+                    in_channels if i == 0 else hidden_channels,
+                    hidden_channels,
+                    num_nodes=num_nodes,
+                    num_hyperedges=num_hyperedges
+                ) for i in range(num_hgnn_layers)
+            ])
         
-        # Layer 2: Heterogeneous Graph Transformer (HGT)
+        # 2. Heterogeneous Graph Transformer
         self.hgt = HeterogenousGraphTransformer(
-            hidden_channels,
-            hidden_channels,
+            in_channels=hidden_channels,
+            out_channels=hidden_channels,
             num_heads=num_hgt_heads,
             node_types=node_types,
             edge_types=edge_types
         )
         
-        # Layer 3: Temporal Graph Network (TGN)
+        # 3. Temporal Graph Network
         self.tgn = TemporalGraphNetwork(
-            hidden_channels,
-            hidden_channels,
+            in_channels=hidden_channels,
+            out_channels=hidden_channels,
             time_window=time_window
         )
         
-        # Output heads for multi-task learning
-        # Head 1: Price prediction
+        # 4. Output Heads
         self.price_head = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels),
+            nn.Linear(hidden_channels, hidden_channels // 2),
             nn.ReLU(),
-            nn.Linear(hidden_channels, 1)
+            nn.Linear(hidden_channels // 2, 1)
         )
-        
-        # Head 2: Change forecast
         self.change_head = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels),
+            nn.Linear(hidden_channels, hidden_channels // 2),
             nn.ReLU(),
-            nn.Linear(hidden_channels, 1),
-            nn.Tanh()
+            nn.Linear(hidden_channels // 2, 1)
         )
-        
-        # Head 3: Critical node identification (logits, no sigmoid - BCEWithLogitsLoss includes it)
         self.criticality_head = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels),
+            nn.Linear(hidden_channels, hidden_channels // 2),
             nn.ReLU(),
-            nn.Linear(hidden_channels, 1)
-            # No Sigmoid - BCEWithLogitsLoss expects logits
+            nn.Linear(hidden_channels // 2, 4) # 4 classes: Low, Medium, High, Critical
         )
         
-        # Entropy analysis components
-        self.entropy_analyzer = EntropyAnalyzer(hidden_channels, num_nodes)
-        
+        # 5. Entropy Analyzer
+        self.entropy_analyzer = EntropyAnalyzer(num_nodes, num_hyperedges)
+
         self.reset_parameters()
-    
+
     def reset_parameters(self):
-        for layer in self.hgnn_layers:
-            layer.reset_parameters()
+        if self.hgnn_layers:
+            for layer in self.hgnn_layers:
+                layer.reset_parameters()
+        if self.hypergraph_conv:
+            self.hypergraph_conv.reset_parameters()
+        
         self.hgt.reset_parameters()
         self.tgn.reset_parameters()
         for head in [self.price_head, self.change_head, self.criticality_head]:
-            for module in head:
-                if hasattr(module, 'reset_parameters'):
-                    module.reset_parameters()
+            for layer in head:
+                if isinstance(layer, nn.Linear):
+                    layer.reset_parameters()
         self.entropy_analyzer.reset_parameters()
     
     def forward(self, 
                 node_features: torch.Tensor,
-                incidence_matrix: torch.Tensor,
+                incidence_matrix: torch.Tensor, # Sparse (N, E) tensor
                 node_types: List[str],
                 edge_index: torch.Tensor,
                 edge_types: List[str],
                 timestamps: torch.Tensor) -> Dict:
         """
         Full forward pass through all layers
-        
-        Returns dict with:
-        - price_pred: Predicted prices
-        - change_pred: Predicted changes
-        - criticality: Node criticality scores
-        - entropy: Information flow entropy
-        - sensitivity: Sensitivity to perturbations
-        - attention_weights: Attention scores (for interpretability)
         """
-        
-        # Layer 1: HGNN+ - multi-way relationship understanding
         x = node_features
         attention_weights_hgnn = {}
-        for i, hgnn_layer in enumerate(self.hgnn_layers):
-            x, edge_emb, attn = hgnn_layer(x, incidence_matrix)
-            attention_weights_hgnn[f'layer_{i}'] = attn
+
+        # 1. Apply hypergraph convolution
+        if self.use_spectral_conv and self.hypergraph_conv:
+            # Spectral conv expects (E, N)
+            x = self.hypergraph_conv(x, incidence_matrix.t())
+            attention_weights_hgnn['layer_0'] = torch.ones(self.num_hyperedges, device=x.device)
+        elif self.hgnn_layers:
+            # v1.0 HGNN+ layers expect (E, N)
+            for i, hgnn_layer in enumerate(self.hgnn_layers):
+                x, _, attn = hgnn_layer(x, incidence_matrix.t()) 
+                attention_weights_hgnn[f'layer_{i}'] = attn
         
-        # Layer 2: HGT - entity type distinction
+        # 2. HGT - entity type distinction
         x_hgt, attention_weights_hgt = self.hgt(
-            x, node_types, edge_index, edge_types
+            x, edge_index, node_types, edge_types
         )
         
-        # Layer 3: TGN - temporal cascade tracking
+        # 3. TGN - temporal cascade tracking
         x_tgn, cascade_scores = self.tgn(x_hgt, timestamps, batch_size=1)
         
-        # Multi-task output heads
+        # 4. Multi-task output heads
         price_pred = self.price_head(x_tgn)
         change_pred = self.change_head(x_tgn)
-        criticality = self.criticality_head(x_tgn)
+        criticality_logits = self.criticality_head(x_tgn)
+        criticality_prob = F.softmax(criticality_logits, dim=-1)
+        criticality_pred = torch.argmax(criticality_prob, dim=-1)
         
-        # Entropy analysis
+        # 5. Entropy analysis
         entropy_metrics = self.entropy_analyzer(
             node_features=x_tgn,
             attention_weights_hgnn=attention_weights_hgnn,
@@ -442,16 +500,17 @@ class HeterogeneousTemporalHypergraphNN(nn.Module):
         )
         
         return {
-            'price_pred': price_pred.squeeze(),
-            'change_pred': change_pred.squeeze(),
-            'criticality': criticality.squeeze(),
-            'cascade_scores': cascade_scores,
-            'entropy': entropy_metrics['entropy'],
-            'sensitivity': entropy_metrics['sensitivity'],
-            'information_flow': entropy_metrics['information_flow'],
-            'attention_weights_hgnn': attention_weights_hgnn,
-            'attention_weights_hgt': attention_weights_hgt,
-            'embeddings': x_tgn
+            "price_pred": price_pred,
+            "change_pred": change_pred,
+            "criticality_logits": criticality_logits,
+            "criticality_prob": criticality_prob,
+            "criticality_pred": criticality_pred,
+            "cascade_scores": cascade_scores,
+            "entropy": entropy_metrics["entropy"],
+            "sensitivity": entropy_metrics["sensitivity"],
+            "information_flow": entropy_metrics["information_flow"],
+            "attention_hgnn": attention_weights_hgnn,
+            "attention_hgt": attention_weights_hgt,
         }
 
 
@@ -609,19 +668,19 @@ class MultiTaskLoss(nn.Module):
     Combines three tasks:
     1. Price prediction (MSE)
     2. Change forecast (MSE)
-    3. Critical node identification (Binary cross-entropy)
+    3. Critical node identification (Cross-entropy for multi-class)
     """
     
     def __init__(self, weight_price: float = 1.0, weight_change: float = 0.5,
-                 weight_criticality: float = 0.3):
+                 weight_criticality: float = 1.2, class_weights: Optional[torch.Tensor] = None):
         super().__init__()
         self.weight_price = weight_price
         self.weight_change = weight_change
         self.weight_criticality = weight_criticality
         
         self.mse_loss = nn.MSELoss()
-        # Use BCEWithLogitsLoss for AMP compatibility (includes sigmoid)
-        self.bce_loss = nn.BCEWithLogitsLoss()
+        # Use CrossEntropyLoss for multi-class classification
+        self.ce_loss = nn.CrossEntropyLoss(weight=class_weights)
     
     def forward(self,
                 price_pred: torch.Tensor,
@@ -636,7 +695,8 @@ class MultiTaskLoss(nn.Module):
         
         loss_price = self.mse_loss(price_pred, price_target)
         loss_change = self.mse_loss(change_pred, change_target)
-        loss_criticality = self.bce_loss(criticality_pred, criticality_target)
+        # Ensure target is long type for CrossEntropyLoss
+        loss_criticality = self.ce_loss(criticality_pred, criticality_target.long())
         
         total_loss = (self.weight_price * loss_price +
                      self.weight_change * loss_change +

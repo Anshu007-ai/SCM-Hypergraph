@@ -205,17 +205,15 @@ class RiskLabelGenerator:
     
     @staticmethod
     def _assign_risk_level(hci_score: float) -> str:
-        """Map HCI score to risk level"""
-        if hci_score >= 0.8:
-            return "Critical"
-        elif hci_score >= 0.6:
-            return "High"
-        elif hci_score >= 0.4:
-            return "Medium"
-        elif hci_score >= 0.2:
-            return "Low"
+        """Map HCI score to a categorical risk level."""
+        if hci_score >= 0.6591: # 90th percentile for DataCo
+            return 'Critical'
+        elif hci_score >= 0.60:
+            return 'High'
+        elif hci_score >= 0.55:
+            return 'Medium'
         else:
-            return "Minimal"
+            return 'Low'
     
     def generate_all_labels(self) -> pd.DataFrame:
         """

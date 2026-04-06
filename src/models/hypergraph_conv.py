@@ -98,35 +98,21 @@ class SpectralHypergraphConv(nn.Module):
         if in_channels != out_channels:
             self.residual_proj = nn.Linear(in_channels, out_channels, bias=False)
         else:
-            self.residual_proj = None
+            self.residual_proj = nn.Identity()
 
-        # Layer normalisation applied after the convolution
-        self.layer_norm = nn.LayerNorm(out_channels)
+        # Layer normalization
+        self.norm = nn.LayerNorm(out_channels)
 
-        # Hyperedge aggregation mechanism
-        self.hyperedge_aggregator = create_hyperedge_aggregator(attention_type, in_channels)
-
-        # Optional attention mechanism over hyperedge weights (legacy)
-        if use_attention and attention_type != 'uniform':
-            self.attn_fc = nn.Sequential(
-                nn.Linear(in_channels, in_channels // 2),
-                nn.LeakyReLU(0.2),
-                nn.Linear(in_channels // 2, 1),
-            )
-
-        self.dropout = nn.Dropout(dropout)
+        # Dropout
+        self.dropout = nn.Dropout(p=dropout)
+        
         self.reset_parameters()
 
-    def reset_parameters(self) -> None:
-        """Reinitialise all learnable parameters."""
-        nn.init.xavier_uniform_(self.theta.weight)
-        if self.residual_proj is not None:
-            nn.init.xavier_uniform_(self.residual_proj.weight)
-        self.layer_norm.reset_parameters()
-        if hasattr(self, 'attn_fc'):
-            for module in self.attn_fc:
-                if hasattr(module, "reset_parameters"):
-                    module.reset_parameters()
+    def reset_parameters(self):
+        """Initialize all learnable parameters."""
+        self.theta.reset_parameters()
+        if isinstance(self.residual_proj, nn.Linear):
+            self.residual_proj.reset_parameters()
 
     # ------------------------------------------------------------------
     # Core helpers
@@ -265,7 +251,7 @@ class SpectralHypergraphConv(nn.Module):
             node_out = node_out + residual
 
         # ---- LayerNorm + activation + dropout -----------------------
-        node_out = self.layer_norm(node_out)
+        node_out = self.norm(node_out)
         node_out = F.elu(node_out)
         node_out = self.dropout(node_out)
 

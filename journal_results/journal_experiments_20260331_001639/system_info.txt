@@ -1,0 +1,7 @@
+HT-HGNN Journal Experiments
+==========================
+Start time: Tue Mar 31 00:16:43 IST 2026
+Python version: Python 3.14.2
+System: MINGW64_NT-10.0-26200 LAPTOP-2DMMR837 3.6.5-22c95533.x86_64 2025-10-10 12:02 UTC x86_64 Msys
+Working directory: /d/College/Final year Project/SChypergraph
+
